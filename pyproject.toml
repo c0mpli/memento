@@ -24,7 +24,7 @@ dev = ["pytest>=7"]
 memento = "memento.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourname/memento"
+Homepage = "https://github.com/c0mpli/memento"
 
 [tool.setuptools.packages.find]
 include = ["memento*"]

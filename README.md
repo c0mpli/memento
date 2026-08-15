@@ -67,13 +67,13 @@ Requires macOS. Uses [uv](https://docs.astral.sh/uv/) — no manual venv.
 **One command:**
 
 ```bash
-uv tool install git+https://github.com/yourname/memento && memento init && memento start
+uv tool install git+https://github.com/c0mpli/memento && memento init && memento start
 ```
 
 Or from a local checkout:
 
 ```bash
-git clone https://github.com/yourname/memento ~/code/memento && cd ~/code/memento
+git clone https://github.com/c0mpli/memento ~/code/memento && cd ~/code/memento
 ./scripts/install.sh        # installs uv if needed, then installs + starts Memento
 # or:  make install && memento init && memento start
 ```

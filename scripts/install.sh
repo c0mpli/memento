@@ -2,7 +2,7 @@
 # Memento one-command installer (uv-based).
 #
 #   Local repo:   ./scripts/install.sh
-#   Remote:       curl -LsSf https://raw.githubusercontent.com/yourname/memento/main/scripts/install.sh | sh
+#   Remote:       curl -LsSf https://raw.githubusercontent.com/c0mpli/memento/main/scripts/install.sh | sh
 #
 # Installs uv if missing, installs Memento as an isolated uv tool, then
 # initialises and starts the background daemon.
@@ -19,7 +19,7 @@ fi
 if [ -f "pyproject.toml" ] && grep -q "name = \"memento-memory\"" pyproject.toml 2>/dev/null; then
     SRC="."
 else
-    SRC="${MEMENTO_REPO:-git+https://github.com/yourname/memento}"
+    SRC="${MEMENTO_REPO:-git+https://github.com/c0mpli/memento}"
 fi
 echo "MEMENTO_INSTALL_TOOL ,{\"source\":\"$SRC\"}"
 uv tool install --force "$SRC"
