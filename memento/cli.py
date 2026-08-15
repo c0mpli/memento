@@ -109,6 +109,12 @@ def cmd_init(args) -> int:
     return 0
 
 
+def cmd_up(args) -> int:
+    """One command: set up + start everything (capture + menu-bar icon)."""
+    cmd_init(args)
+    return cmd_start(args)
+
+
 def cmd_capture(args) -> int:
     from .services.daemon import run
     return run()
@@ -404,8 +410,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
-        build_parser().print_help()
-        return 0
+        # Bare `memento` = the one-command setup: init + start (icon appears).
+        return cmd_up(args)
     return args.func(args)
 
 
