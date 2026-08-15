@@ -28,6 +28,8 @@ def embed_text(cfg: Dict[str, Any], text: str) -> Optional[List[float]]:
             return _ollama(ec, text)
         if provider == "openai":
             return _openai(ec, text)
+        if provider == "gemini":
+            return _gemini(ec, text)
     except Exception:
         return None
     return None
@@ -64,3 +66,17 @@ def _openai(ec: Dict[str, Any], text: str) -> Optional[List[float]]:
     )
     data = out.get("data") or []
     return [float(x) for x in data[0]["embedding"]] if data else None
+
+
+def _gemini(ec: Dict[str, Any], text: str) -> Optional[List[float]]:
+    key = (os.environ.get(ec.get("api_key_env") or "GEMINI_API_KEY", "")
+           or os.environ.get("GOOGLE_API_KEY", ""))
+    if not key:
+        return None
+    model = ec.get("model") or "text-embedding-004"
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           "{}:embedContent?key={}".format(model, key))
+    out = _post(url, {"model": "models/" + model,
+                      "content": {"parts": [{"text": text}]}})
+    values = (out.get("embedding") or {}).get("values")
+    return [float(x) for x in values] if values else None

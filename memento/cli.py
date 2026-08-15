@@ -6,8 +6,9 @@
     stop      unload the LaunchAgent
     restart   stop then start
     status    memory stats + whether the daemon is loaded
-    mcp       run the MCP server over stdio (used by Claude Code / Codex)
+    mcp       run the MCP server (stdio, or --http for custom connectors)
     review    run the agent once now (find + auto-close open loops)
+    config    show or change providers/keys
     search    keyword/semantic search from the terminal
     recent    show recent captures
     threads   list active threads
@@ -29,15 +30,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, config, db
-from .events import emit
+from . import __version__, config
+from .core import database
+from .core.logger import emit
+from .repository import ActionItemRepository, MemoryRepository
+from .types import DEFAULT_KEY_ENV, AgentProvider, EmbedProvider, Event, Transport
 
-AGENT_PROVIDERS = ("none", "claude_cli", "codex_cli", "anthropic", "openai", "ollama")
-EMBED_PROVIDERS = ("none", "ollama", "openai")
-_DEFAULT_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+AGENT_PROVIDERS = tuple(p.value for p in AgentProvider)
+EMBED_PROVIDERS = tuple(p.value for p in EmbedProvider)
 
-LABEL = "com.memento.agent"
-PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist")
+PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / (config.LAUNCH_LABEL + ".plist")
 
 PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -49,7 +51,7 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <array>
         <string>{python}</string>
         <string>-m</string>
-        <string>memento.cli</string>
+        <string>memento</string>
         <string>capture</string>
     </array>
     <key>RunAtLoad</key><true/>
@@ -70,48 +72,44 @@ def _ts(ts) -> str:
         return "?"
 
 
-def _open_db():
-    conn = db.get_conn(config.DB_PATH)
-    db.init_db(conn)
-    return conn
-
-
 # --- lifecycle -------------------------------------------------------------
 
 def cmd_init(args) -> int:
     config.ensure_base()
-    _open_db().close()
+    database.connect().close()
 
     cfg = config.load_config()
     detected = None
-    if (cfg.get("agent", {}).get("provider") or "none") == "none":
+    if (cfg.get("agent", {}).get("provider") or "none") == AgentProvider.NONE.value:
         if shutil.which("claude"):
-            cfg["agent"]["provider"] = "claude_cli"
-            detected = "claude_cli"
+            cfg["agent"]["provider"] = AgentProvider.CLAUDE_CLI.value
+            detected = AgentProvider.CLAUDE_CLI.value
         elif shutil.which("codex"):
-            cfg["agent"]["provider"] = "codex_cli"
-            detected = "codex_cli"
+            cfg["agent"]["provider"] = AgentProvider.CODEX_CLI.value
+            detected = AgentProvider.CODEX_CLI.value
     config.save_config(cfg)
 
-    emit("MEMENTO_INIT_OK",
-         data_dir=str(config.BASE_DIR), db=str(config.DB_PATH),
-         config=str(config.CONFIG_PATH), agent=cfg["agent"]["provider"],
-         detected=detected)
-    emit("MEMENTO_INIT_NEXT",
-         steps=["grant Accessibility to your terminal",
-                "memento start",
-                "claude mcp add memento -- memento mcp"])
+    emit(Event.INIT_OK.value, data_dir=str(config.BASE_DIR), db=str(config.DB_PATH),
+         config=str(config.CONFIG_PATH), agent=cfg["agent"]["provider"], detected=detected)
+    emit(Event.INIT_NEXT.value, steps=["grant Accessibility to your terminal",
+                                       "memento start",
+                                       "claude mcp add memento -- memento mcp"])
     return 0
 
 
 def cmd_capture(args) -> int:
-    from . import daemon
-    return daemon.run()
+    from .services.daemon import run
+    return run()
 
 
 def cmd_mcp(args) -> int:
-    from . import mcp_server
-    mcp_server.main()
+    from .mcp import server
+    if getattr(args, "http", False):
+        emit(Event.MCP_HTTP.value, url="http://{}:{}/mcp".format(args.host, args.port),
+             transport=Transport.HTTP.value)
+        server.main(Transport.HTTP.value, host=args.host, port=args.port)
+    else:
+        server.main()
     return 0
 
 
@@ -119,28 +117,27 @@ def _write_plist() -> None:
     PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     config.ensure_base()
     PLIST_PATH.write_text(PLIST_TEMPLATE.format(
-        label=LABEL, python=sys.executable, log=str(config.LOG_PATH),
-        cwd=str(config.BASE_DIR)))
+        label=config.LAUNCH_LABEL, python=sys.executable,
+        log=str(config.LOG_PATH), cwd=str(config.BASE_DIR)))
 
 
 def cmd_start(args) -> int:
     _write_plist()
     subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
-    r = subprocess.run(["launchctl", "load", "-w", str(PLIST_PATH)],
-                       capture_output=True, text=True)
+    r = subprocess.run(["launchctl", "load", "-w", str(PLIST_PATH)], capture_output=True, text=True)
     if r.returncode != 0:
-        emit("MEMENTO_DAEMON_LOAD_ERR", error=r.stderr.strip())
+        emit(Event.DAEMON_LOAD_ERR.value, error=r.stderr.strip())
         return 1
-    emit("MEMENTO_DAEMON_LOADED", label=LABEL, log=str(config.LOG_PATH))
+    emit(Event.DAEMON_LOADED.value, label=config.LAUNCH_LABEL, log=str(config.LOG_PATH))
     return 0
 
 
 def cmd_stop(args) -> int:
     if not PLIST_PATH.exists():
-        emit("MEMENTO_DAEMON_ABSENT", label=LABEL)
+        emit(Event.DAEMON_ABSENT.value, label=config.LAUNCH_LABEL)
         return 0
     subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
-    emit("MEMENTO_DAEMON_UNLOADED", label=LABEL)
+    emit(Event.DAEMON_UNLOADED.value, label=config.LAUNCH_LABEL)
     return 0
 
 
@@ -151,16 +148,15 @@ def cmd_restart(args) -> int:
 
 def _is_loaded() -> bool:
     r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
-    return LABEL in r.stdout
+    return config.LAUNCH_LABEL in r.stdout
 
 
 def cmd_status(args) -> int:
-    conn = _open_db()
-    s = db.stats(conn)
+    conn = database.connect()
+    s = MemoryRepository(conn).stats()
     conn.close()
-    emit("MEMENTO_STATUS_OK",
-         version=__version__, loaded=_is_loaded(), threads=s["threads"],
-         versions=s["versions"], embeddings=s["embeddings"],
+    emit(Event.STATUS_OK.value, version=__version__, loaded=_is_loaded(),
+         threads=s["threads"], versions=s["versions"], embeddings=s["embeddings"],
          last_capture=_ts(s["last_capture"]) if s["last_capture"] else None,
          db=str(config.DB_PATH))
     return 0
@@ -169,17 +165,17 @@ def cmd_status(args) -> int:
 # --- agent -----------------------------------------------------------------
 
 def cmd_review(args) -> int:
-    from . import agent
+    from .services.open_loops import OpenLoopsService
     cfg = config.load_config()
     provider = cfg.get("agent", {}).get("provider") or "none"
-    if provider == "none":
-        emit("MEMENTO_REVIEW_SKIP", reason="agent disabled", config=str(config.CONFIG_PATH))
+    if provider == AgentProvider.NONE.value:
+        emit(Event.REVIEW_SKIP.value, reason="agent disabled", config=str(config.CONFIG_PATH))
         return 1
-    conn = _open_db()
-    emit("MEMENTO_REVIEW_START", provider=provider, window_minutes=args.minutes)
-    r = agent.run_agent_once(cfg, conn, window_minutes=args.minutes)
+    conn = database.connect()
+    emit(Event.REVIEW_START.value, provider=provider, window_minutes=args.minutes)
+    r = OpenLoopsService(conn, cfg).run_once(window_minutes=args.minutes)
     conn.close()
-    emit("MEMENTO_REVIEW_DONE", provider=provider, new=r["new"], resolved=r["resolved"])
+    emit(Event.REVIEW_DONE.value, provider=provider, new=r["new"], resolved=r["resolved"])
     return 0
 
 
@@ -187,7 +183,7 @@ def cmd_review(args) -> int:
 
 def cmd_config_show(args) -> int:
     cfg = config.load_config()
-    emit("MEMENTO_CONFIG_SHOW", agent=cfg["agent"], embeddings=cfg["embeddings"],
+    emit(Event.CONFIG_SHOW.value, agent=cfg["agent"], embeddings=cfg["embeddings"],
          capture_interval_seconds=cfg["capture_interval_seconds"],
          watchlist=cfg["watchlist"], config=str(config.CONFIG_PATH))
     return 0
@@ -205,16 +201,15 @@ def cmd_config_agent(args) -> int:
         a["command"] = shlex.split(args.command)
     if args.interval is not None:
         a["interval_seconds"] = args.interval
-    # Key-based providers: default the env var name and warn if it's unset.
-    if args.provider in _DEFAULT_KEY_ENV:
-        a["api_key_env"] = args.key_env or a.get("api_key_env") or _DEFAULT_KEY_ENV[args.provider]
+    if args.provider in DEFAULT_KEY_ENV:
+        a["api_key_env"] = args.key_env or a.get("api_key_env") or DEFAULT_KEY_ENV[args.provider]
     elif args.key_env is not None:
         a["api_key_env"] = args.key_env
     config.save_config(cfg)
-    emit("MEMENTO_CONFIG_SET", section="agent", provider=a["provider"],
+    emit(Event.CONFIG_SET.value, section="agent", provider=a["provider"],
          model=a["model"], api_key_env=a["api_key_env"])
-    if args.provider in _DEFAULT_KEY_ENV and not os.environ.get(a["api_key_env"], ""):
-        emit("MEMENTO_CONFIG_HINT", note="set your key: export {}=...".format(a["api_key_env"]))
+    if args.provider in DEFAULT_KEY_ENV and not os.environ.get(a["api_key_env"], ""):
+        emit(Event.CONFIG_HINT.value, note="set your key: export {}=...".format(a["api_key_env"]))
     return 0
 
 
@@ -226,12 +221,12 @@ def cmd_config_embeddings(args) -> int:
         e["model"] = args.model
     if args.endpoint is not None:
         e["endpoint"] = args.endpoint
-    if args.provider == "openai":
-        e["api_key_env"] = args.key_env or e.get("api_key_env") or "OPENAI_API_KEY"
+    if args.provider in DEFAULT_KEY_ENV:
+        e["api_key_env"] = args.key_env or e.get("api_key_env") or DEFAULT_KEY_ENV[args.provider]
     elif args.key_env is not None:
         e["api_key_env"] = args.key_env
     config.save_config(cfg)
-    emit("MEMENTO_CONFIG_SET", section="embeddings", provider=e["provider"],
+    emit(Event.CONFIG_SET.value, section="embeddings", provider=e["provider"],
          model=e["model"], api_key_env=e["api_key_env"])
     return 0
 
@@ -239,52 +234,52 @@ def cmd_config_embeddings(args) -> int:
 # --- reads -----------------------------------------------------------------
 
 def cmd_search(args) -> int:
-    conn = _open_db()
-    rows = db.search(conn, args.query, limit=args.limit)
+    conn = database.connect()
+    rows = MemoryRepository(conn).search(args.query, limit=args.limit)
     conn.close()
     for r in rows:
-        emit("MEMENTO_SEARCH_ROW", ts=_ts(r["captured_at"]), app=r["app"],
+        emit(Event.SEARCH_ROW.value, ts=_ts(r["captured_at"]), app=r["app"],
              text=(r["content"] or "").replace("\n", " ")[:200])
-    emit("MEMENTO_SEARCH_DONE", query=args.query, count=len(rows))
+    emit(Event.SEARCH_DONE.value, query=args.query, count=len(rows))
     return 0
 
 
 def cmd_recent(args) -> int:
-    conn = _open_db()
-    rows = db.recent(conn, limit=args.limit, minutes=args.minutes)
+    conn = database.connect()
+    rows = MemoryRepository(conn).recent(limit=args.limit, minutes=args.minutes)
     conn.close()
     for r in rows:
-        emit("MEMENTO_RECENT_ROW", ts=_ts(r["captured_at"]), app=r["app"],
+        emit(Event.RECENT_ROW.value, ts=_ts(r["captured_at"]), app=r["app"],
              text=(r["content"] or "").replace("\n", " ")[:200])
-    emit("MEMENTO_RECENT_DONE", count=len(rows), minutes=args.minutes)
+    emit(Event.RECENT_DONE.value, count=len(rows), minutes=args.minutes)
     return 0
 
 
 def cmd_threads(args) -> int:
-    conn = _open_db()
-    rows = db.list_threads(conn, limit=args.limit)
+    conn = database.connect()
+    rows = MemoryRepository(conn).list_threads(limit=args.limit)
     conn.close()
     for r in rows:
-        emit("MEMENTO_THREAD_ROW", id=r["id"], app=r["app"],
+        emit(Event.THREAD_ROW.value, id=r["id"], app=r["app"],
              title=(r["title"] or "")[:100], versions=r["version_count"],
              last_seen=_ts(r["last_seen"]))
-    emit("MEMENTO_THREAD_DONE", count=len(rows))
+    emit(Event.THREAD_DONE.value, count=len(rows))
     return 0
 
 
 def cmd_loops(args) -> int:
-    from . import agent
-    conn = _open_db()
-    items = agent.open_items(conn, limit=args.limit)
-    for i in items:
-        emit("MEMENTO_LOOP_OPEN", id=i["id"], title=i["title"],
+    conn = database.connect()
+    items = ActionItemRepository(conn)
+    for i in items.open_items(limit=args.limit):
+        emit(Event.LOOP_OPEN.value, id=i["id"], title=i["title"],
              detail=i["detail"] or "", source_app=i["source_app"] or "")
     if args.all:
-        for i in agent.resolved_items(conn, limit=args.limit):
-            emit("MEMENTO_LOOP_CLOSED", id=i["id"], title=i["title"],
+        for i in items.resolved_items(limit=args.limit):
+            emit(Event.LOOP_CLOSED.value, id=i["id"], title=i["title"],
                  evidence=i["resolution_evidence"] or "", resolved_at=_ts(i["resolved_at"]))
+    open_n = len(items.open_items(limit=args.limit))
     conn.close()
-    emit("MEMENTO_LOOP_DONE", open=len(items))
+    emit(Event.LOOP_DONE.value, open=open_n)
     return 0
 
 
@@ -292,40 +287,40 @@ def cmd_loops(args) -> int:
 
 def cmd_doctor(args) -> int:
     ok = True
-    emit("MEMENTO_DOCTOR_CHECK", name="python", status="ok", detail=sys.version.split()[0])
+    emit(Event.DOCTOR_CHECK.value, name="python", status="ok", detail=sys.version.split()[0])
     try:
         import mcp  # noqa: F401
-        emit("MEMENTO_DOCTOR_CHECK", name="mcp", status="ok", detail="installed")
+        emit(Event.DOCTOR_CHECK.value, name="mcp", status="ok", detail="installed")
     except Exception:
         ok = False
-        emit("MEMENTO_DOCTOR_CHECK", name="mcp", status="missing", detail="pip install mcp")
+        emit(Event.DOCTOR_CHECK.value, name="mcp", status="missing", detail="pip install mcp")
     r = subprocess.run(["osascript", "-e",
                         'tell application "System Events" to get name of first '
                         'application process whose frontmost is true'],
                        capture_output=True, text=True)
     if r.returncode == 0:
-        emit("MEMENTO_DOCTOR_CHECK", name="accessibility", status="ok", detail=r.stdout.strip())
+        emit(Event.DOCTOR_CHECK.value, name="accessibility", status="ok", detail=r.stdout.strip())
     else:
         ok = False
-        emit("MEMENTO_DOCTOR_CHECK", name="accessibility", status="denied",
+        emit(Event.DOCTOR_CHECK.value, name="accessibility", status="denied",
              detail=r.stderr.strip() or "grant Accessibility to your terminal")
     cfg = config.load_config()
-    emit("MEMENTO_DOCTOR_CHECK", name="agent", status="info",
+    emit(Event.DOCTOR_CHECK.value, name="agent", status="info",
          detail=cfg.get("agent", {}).get("provider"))
-    emit("MEMENTO_DOCTOR_CHECK", name="embeddings", status="info",
+    emit(Event.DOCTOR_CHECK.value, name="embeddings", status="info",
          detail=cfg.get("embeddings", {}).get("provider"))
-    emit("MEMENTO_DOCTOR_CHECK", name="daemon", status="info",
+    emit(Event.DOCTOR_CHECK.value, name="daemon", status="info",
          detail="loaded" if _is_loaded() else "not loaded")
-    emit("MEMENTO_DOCTOR_DONE", ok=ok)
+    emit(Event.DOCTOR_DONE.value, ok=ok)
     return 0 if ok else 1
 
 
 def cmd_tail(args) -> int:
     if not config.LOG_PATH.exists():
-        emit("MEMENTO_TAIL_EMPTY", log=str(config.LOG_PATH))
+        emit(Event.TAIL_EMPTY.value, log=str(config.LOG_PATH))
         return 0
     for ln in config.LOG_PATH.read_text(errors="replace").splitlines()[-args.n:]:
-        print(ln)  # already structured events written by the daemon
+        print(ln)
     return 0
 
 
@@ -336,31 +331,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-V", "--version", action="version", version="memento " + __version__)
     sub = p.add_subparsers(dest="cmd")
 
-    for name in ("init", "capture", "mcp", "start", "stop", "restart", "status", "doctor"):
+    for name in ("init", "capture", "start", "stop", "restart", "status", "doctor"):
         sub.add_parser(name).set_defaults(func=globals()["cmd_" + name])
 
-    sp = sub.add_parser("review"); sp.add_argument("--minutes", type=int, default=120); sp.set_defaults(func=cmd_review)
+    mp = sub.add_parser("mcp")
+    mp.add_argument("--http", action="store_true", help="serve over streamable-HTTP for custom connectors")
+    mp.add_argument("--host", default=config.MCP_DEFAULT_HOST)
+    mp.add_argument("--port", type=int, default=config.MCP_DEFAULT_PORT)
+    mp.set_defaults(func=cmd_mcp)
+
+    rp = sub.add_parser("review"); rp.add_argument("--minutes", type=int, default=120); rp.set_defaults(func=cmd_review)
     sp = sub.add_parser("search"); sp.add_argument("query"); sp.add_argument("--limit", type=int, default=10); sp.set_defaults(func=cmd_search)
     sp = sub.add_parser("recent"); sp.add_argument("--minutes", type=int, default=None); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_recent)
     sp = sub.add_parser("threads"); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_threads)
-    sp = sub.add_parser("loops"); sp.add_argument("--limit", type=int, default=50); sp.add_argument("--all", action="store_true", help="also show auto-closed loops"); sp.set_defaults(func=cmd_loops)
+    sp = sub.add_parser("loops"); sp.add_argument("--limit", type=int, default=50); sp.add_argument("--all", action="store_true"); sp.set_defaults(func=cmd_loops)
     sp = sub.add_parser("tail"); sp.add_argument("-n", type=int, default=40); sp.set_defaults(func=cmd_tail)
 
-    # config: switch the agent/embeddings provider (e.g. to API keys) in one line
     cfgp = sub.add_parser("config", help="show or change providers/keys")
     csub = cfgp.add_subparsers(dest="section")
     csub.add_parser("show").set_defaults(func=cmd_config_show)
     ca = csub.add_parser("agent", help="e.g. memento config agent --provider anthropic")
     ca.add_argument("--provider", required=True, choices=AGENT_PROVIDERS)
     ca.add_argument("--model"); ca.add_argument("--key-env", dest="key_env")
-    ca.add_argument("--endpoint"); ca.add_argument("--command",
-                    help='override CLI argv, e.g. "claude -p {prompt}"')
+    ca.add_argument("--endpoint"); ca.add_argument("--command", help='override CLI argv, e.g. "claude -p {prompt}"')
     ca.add_argument("--interval", type=int); ca.set_defaults(func=cmd_config_agent)
     ce = csub.add_parser("embeddings", help="e.g. memento config embeddings --provider ollama")
     ce.add_argument("--provider", required=True, choices=EMBED_PROVIDERS)
     ce.add_argument("--model"); ce.add_argument("--key-env", dest="key_env")
     ce.add_argument("--endpoint"); ce.set_defaults(func=cmd_config_embeddings)
-    cfgp.set_defaults(func=cmd_config_show)  # bare `memento config` -> show
+    cfgp.set_defaults(func=cmd_config_show)
     return p
 
 

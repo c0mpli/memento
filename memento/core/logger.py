@@ -1,11 +1,11 @@
-"""Structured event output.
+"""Structured logging.
 
-Every line Memento prints to a terminal or its log follows one format:
+Every line Memento writes to a terminal or its log file follows one format:
 
     CODE_AREA_STATUS ,{json data}
 
 so output is greppable and machine-parseable. Use `emit()` for stdout and
-`line()` when you need the string (e.g. to also write it to a log file).
+`line()` when you need the string (e.g. to also append it to a log file).
 """
 
 from __future__ import annotations
