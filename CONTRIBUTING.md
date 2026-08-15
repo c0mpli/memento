@@ -193,10 +193,31 @@ live without restarting the daemon.
    run `brew update-python-resources` to vendor `mcp` / `rumps`.
 3. `brew tap c0mpli/tap && brew install memento`.
 
+## Accuracy / eval
+
+`memento eval` scores retrieval + QA accuracy per question type, the same six
+categories the memory benchmarks (LongMemEval) report.
+
+```bash
+memento eval                       # bundled 6-case smoke sample (one per type)
+memento eval --dataset longmemeval_s.json --top-k 10
+memento config embeddings --provider gemini --model text-embedding-004   # fairer retrieval
+```
+
+Each case is ingested into a fresh in-memory DB, retrieved with Memento's own
+search, answered by the configured agent, and graded by the same agent as an LLM
+judge, so the score reflects the real end-to-end product. The bundled sample has
+no distractor sessions (it's a smoke test); download LongMemEval-S for a real
+number and pass `--dataset`. Retrieval quality is the main lever, so turn on
+embeddings for a fair comparison against embedding-based systems.
+
+Code: `memento/eval/` (dataset loader, per-case harness, metrics); prompts in
+`config/prompts.py`.
+
 ## Roadmap
 
 - Richer per-app AX parsers (message-level, not just visible text)
 - Encryption at rest (SQLCipher / field-level)
 - Meeting/voice capture with local Whisper
 - Multi-scale open loops (days → months)
-- Eval harness (`memento eval`) for retrieval + open-loop accuracy
+- Full LongMemEval-S run + published per-category numbers

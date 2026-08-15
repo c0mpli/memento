@@ -38,3 +38,30 @@ def build_open_loops_prompt(open_items: List[Dict], activity: List[Dict]) -> str
     )
     return "{}\nCURRENTLY OPEN LOOPS:\n{}\n\nRECENT ACTIVITY:\n{}\n".format(
         OPEN_LOOPS_INSTRUCTIONS, open_block, log)
+
+
+# ---- eval harness (LongMemEval-style QA + LLM judge) ----
+
+QA_INSTRUCTIONS = (
+    "Answer the question using ONLY the retrieved memory below. Be concise and "
+    "specific. If the memory does not contain the answer, reply exactly "
+    "\"I don't know.\""
+)
+
+
+def build_qa_prompt(context: str, question: str) -> str:
+    return "{}\n\nMEMORY:\n{}\n\nQUESTION: {}\nANSWER:".format(
+        QA_INSTRUCTIONS, context, question)
+
+
+JUDGE_INSTRUCTIONS = (
+    "You grade whether a predicted answer matches the gold answer in meaning, "
+    "ignoring wording and formatting. Return ONLY a JSON object."
+)
+
+
+def build_judge_prompt(question: str, gold: str, predicted: str) -> str:
+    return (
+        '{}\n\nQuestion: {}\nGold answer: {}\nPredicted answer: {}\n\n'
+        'Return: {{"correct": true|false}}'
+    ).format(JUDGE_INSTRUCTIONS, question, gold, predicted)

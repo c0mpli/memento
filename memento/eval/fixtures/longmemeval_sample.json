@@ -1,0 +1,92 @@
+[
+  {
+    "question_id": "sample_ssu_1",
+    "question_type": "single-session-user",
+    "question": "What did I switch my daily coffee to, and why?",
+    "answer": "Matcha, because caffeine jitters were hurting my focus.",
+    "haystack_dates": ["2023/02/01 (Wed) 09:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I've decided to switch my daily coffee to matcha because the caffeine jitters were hurting my focus in the mornings."},
+        {"role": "assistant", "content": "Matcha gives a smoother, more sustained caffeine release, so that should help."}
+      ]
+    ]
+  },
+  {
+    "question_id": "sample_ssa_1",
+    "question_type": "single-session-assistant",
+    "question": "Which book did you recommend to me for habit formation?",
+    "answer": "Atomic Habits by James Clear.",
+    "haystack_dates": ["2023/02/03 (Fri) 14:10"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "Can you recommend a solid book on building better habits?"},
+        {"role": "assistant", "content": "I'd recommend Atomic Habits by James Clear, it's the most practical one."}
+      ]
+    ]
+  },
+  {
+    "question_id": "sample_ssp_1",
+    "question_type": "single-session-preference",
+    "question": "Given my stated preferences, how should you plan my future travel?",
+    "answer": "Prefer train travel over flying, and boutique hotels over chains.",
+    "haystack_dates": ["2023/02/05 (Sun) 18:30"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "For any future trip suggestions: I strongly prefer train travel over flying, and I like boutique hotels, not big chains."},
+        {"role": "assistant", "content": "Understood, I'll keep that in mind for future suggestions."}
+      ]
+    ]
+  },
+  {
+    "question_id": "sample_ku_1",
+    "question_type": "knowledge-update",
+    "question": "What is my current work laptop?",
+    "answer": "A 2024 MacBook Air.",
+    "haystack_dates": ["2023/01/15 (Sun) 10:00", "2023/04/20 (Thu) 11:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "My work laptop is a 2019 MacBook Pro."},
+        {"role": "assistant", "content": "Got it."}
+      ],
+      [
+        {"role": "user", "content": "Update: IT just issued me a new 2024 MacBook Air for work, replacing the old one."},
+        {"role": "assistant", "content": "Noted, I'll treat the 2024 MacBook Air as your current work laptop."}
+      ]
+    ]
+  },
+  {
+    "question_id": "sample_tr_1",
+    "question_type": "temporal-reasoning",
+    "question": "Roughly how long had I been learning Spanish when I could hold basic conversations?",
+    "answer": "About two months.",
+    "haystack_dates": ["2023/01/10 (Tue) 20:00", "2023/03/10 (Fri) 20:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I started learning Spanish today, complete beginner."},
+        {"role": "assistant", "content": "Nice, good luck with it!"}
+      ],
+      [
+        {"role": "user", "content": "I can now hold basic conversations in Spanish."},
+        {"role": "assistant", "content": "Great progress since you started."}
+      ]
+    ]
+  },
+  {
+    "question_id": "sample_ms_1",
+    "question_type": "multi-session",
+    "question": "Where and roughly when do I need to travel for my sister's wedding?",
+    "answer": "Jaipur, in December.",
+    "haystack_dates": ["2023/02/10 (Fri) 12:00", "2023/02/12 (Sun) 09:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "My sister Priya is getting married in December this year."},
+        {"role": "assistant", "content": "Congratulations to Priya!"}
+      ],
+      [
+        {"role": "user", "content": "I need to book flights to Jaipur for Priya's wedding."},
+        {"role": "assistant", "content": "I can help you plan the Jaipur trip."}
+      ]
+    ]
+  }
+]

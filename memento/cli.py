@@ -223,6 +223,16 @@ def cmd_review(args) -> int:
     return 0
 
 
+def cmd_eval(args) -> int:
+    from .eval import run_eval
+    cfg = config.load_config()
+    if (cfg.get("agent", {}).get("provider") or "none") == AgentProvider.NONE.value:
+        emit(Event.REVIEW_SKIP.value, reason="agent disabled", config=str(config.CONFIG_PATH))
+        return 1
+    run_eval(cfg, dataset_path=args.dataset, limit=args.limit, top_k=args.top_k)
+    return 0
+
+
 # --- config ----------------------------------------------------------------
 
 def cmd_config_show(args) -> int:
@@ -385,6 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     mp.set_defaults(func=cmd_mcp)
 
     rp = sub.add_parser("review"); rp.add_argument("--minutes", type=int, default=120); rp.set_defaults(func=cmd_review)
+    ep = sub.add_parser("eval"); ep.add_argument("--dataset", default=None); ep.add_argument("--limit", type=int, default=None); ep.add_argument("--top-k", dest="top_k", type=int, default=8); ep.set_defaults(func=cmd_eval)
     sp = sub.add_parser("search"); sp.add_argument("query"); sp.add_argument("--limit", type=int, default=10); sp.set_defaults(func=cmd_search)
     sp = sub.add_parser("recent"); sp.add_argument("--minutes", type=int, default=None); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_recent)
     sp = sub.add_parser("threads"); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_threads)
