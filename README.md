@@ -65,27 +65,33 @@ now" snapshot. The history is the whole point.
 
 ## Install
 
-Requires macOS + Python 3.9+.
+Requires macOS. Uses [uv](https://docs.astral.sh/uv/) — no manual venv.
+
+**One command:**
 
 ```bash
-git clone https://github.com/yourname/memento ~/code/memento
-cd ~/code/memento
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-memento init      # create ~/.memento, the DB, and default config
+uv tool install git+https://github.com/yourname/memento && memento init && memento start
 ```
 
-Grant your terminal **Accessibility** permission (System Settings → Privacy &
-Security → Accessibility) so window titles can be read. Then:
+Or from a local checkout:
 
 ```bash
-memento start     # background capture at login, 24x7
-memento status    # see it filling up
+git clone https://github.com/yourname/memento ~/code/memento && cd ~/code/memento
+./scripts/install.sh        # installs uv if needed, then installs + starts Memento
+# or:  make install && memento init && memento start
 ```
 
-A Homebrew formula template is in `packaging/memento.rb` for a `brew install`
-flow once you publish a tap.
+Grant your terminal (or the installed tool) **Accessibility** permission —
+System Settings → Privacy & Security → Accessibility — so window titles can be
+read. Then `memento status` to watch it fill up.
+
+**Homebrew** (once you publish a tap): a formula template lives in
+`packaging/memento.rb`.
+
+```bash
+brew tap yourname/tap && brew install memento
+memento init && memento start
+```
 
 ## Connect your assistant
 
@@ -135,32 +141,57 @@ memento tail -n 50        # daemon log
 }
 ```
 
-### Optional: semantic search (bring your own, or run it locally)
+## Providers — use your CLI, or bring your own keys
 
-Free & local with [Ollama](https://ollama.com):
+By default `memento init` wires the agent to whichever CLI you already pay for
+(`claude` or `codex`) — **no API key needed**. Switch any time with one command:
 
 ```bash
-ollama pull nomic-embed-text
-```
-```jsonc
-"embeddings": { "provider": "ollama", "model": "nomic-embed-text",
-                "endpoint": "http://127.0.0.1:11434" }
+# use your Claude Code / Codex subscription (default)
+memento config agent --provider claude_cli
+memento config agent --provider codex_cli
+
+# OR bring your own key instead
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY=...
+memento config agent --provider anthropic --model claude-sonnet-4-5
+memento config agent --provider openai    --model gpt-4o-mini
+
+# OR run it fully local
+memento config agent --provider ollama --model llama3.1
 ```
 
-Or with a key:
+Optional semantic search (keyword search is the zero-cost default):
 
-```jsonc
-"embeddings": { "provider": "openai", "model": "text-embedding-3-small",
-                "api_key_env": "OPENAI_API_KEY" }
+```bash
+memento config embeddings --provider ollama --model nomic-embed-text   # local, free
+memento config embeddings --provider openai --model text-embedding-3-small
 ```
 
-### Optional: background "open loops" agent
+`memento config show` prints the current setup.
 
-```jsonc
-"agent": { "provider": "anthropic", "model": "claude-sonnet-4-5",
-           "api_key_env": "ANTHROPIC_API_KEY", "interval_seconds": 3600 }
-```
-(`openai` and local `ollama` are also supported.)
+## Integrations — what gets captured
+
+**Today (v0.1):** Memento captures the **frontmost app + window title** across
+*every* app generically — WhatsApp, Gmail, Calendar, Slack, browsers, editors,
+etc. all show up as threads and an activity timeline, and that alone is enough
+for the open-loops agent to work. Optionally it can fold in the clipboard.
+
+**Not yet:** deep *content* extraction per app (reading actual WhatsApp messages,
+Gmail thread bodies, calendar event details). That requires per-app
+Accessibility-tree parsers — the roadmap below. So: **broad coverage now,
+shallow depth**; deep per-app integrations are the next milestone.
+
+| App | Captured today | Deep content (planned) |
+|-----|:--:|:--:|
+| WhatsApp / Slack / Discord / Teams | title + activity | ⏳ AX parser |
+| Gmail / Mail / Outlook | title + activity | ⏳ AX parser |
+| Calendar / Fantastical | title + activity | ⏳ AX / AppleScript |
+| Notion / Obsidian / Notes | title + activity | ⏳ AX parser |
+| Browsers (any tab) | title (+ URL planned) | ⏳ AX parser |
+| Everything else | title + activity | generic AX fallback |
+
+The capture layer is built to be pluggable so these parsers can be added without
+touching the store or agent.
 
 ## Privacy
 
