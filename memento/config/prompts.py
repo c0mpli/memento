@@ -65,3 +65,64 @@ def build_judge_prompt(question: str, gold: str, predicted: str) -> str:
         '{}\n\nQuestion: {}\nGold answer: {}\nPredicted answer: {}\n\n'
         'Return: {{"correct": true|false}}'
     ).format(JUDGE_INSTRUCTIONS, question, gold, predicted)
+
+
+# ---- fact extraction (turn raw activity into atomic, indexable facts) ----
+
+FACT_EXTRACTION_INSTRUCTIONS = (
+    "Extract atomic, self-contained facts about the USER from the conversation "
+    "below. Each fact must stand alone without the surrounding context (resolve "
+    "pronouns and references). Capture stated preferences, decisions, states, "
+    "attributes, plans, and events. Ignore small talk and assistant chatter.\n\n"
+    "Return ONLY a JSON array; [] if nothing. Each item:\n"
+    '{"kind":"fact|preference|event","content":"a single standalone statement",'
+    '"subject":"2-4 word topic key","updates":true|false}\n'
+    "Set updates=true when the fact changes or replaces an earlier state "
+    "(e.g. a move, a switch, a new value)."
+)
+
+
+def build_extraction_prompt(conversation: str) -> str:
+    return "{}\n\nCONVERSATION:\n{}\n".format(FACT_EXTRACTION_INSTRUCTIONS, conversation)
+
+
+# ---- time-aware query expansion ----
+
+TIME_EXPANSION_INSTRUCTIONS = (
+    "Given the user's question and the current date, determine the time window "
+    "the answer should come from. Return ONLY JSON: "
+    '{"from":"YYYY-MM-DD"|null,"to":"YYYY-MM-DD"|null}. '
+    "Use null for an open bound. Return both null if the question is not time-scoped."
+)
+
+
+def build_time_expansion_prompt(question: str, as_of: str) -> str:
+    return "{}\n\nCurrent date: {}\nQuestion: {}\n".format(
+        TIME_EXPANSION_INSTRUCTIONS, as_of, question)
+
+
+# ---- multi-hop query decomposition ----
+
+DECOMPOSITION_INSTRUCTIONS = (
+    "Break the question into the minimal set of standalone sub-questions whose "
+    "answers together answer it. If it is already simple, return it unchanged as "
+    "the single item. Return ONLY JSON: {\"subquestions\":[\"...\"]} (max 4)."
+)
+
+
+def build_decomposition_prompt(question: str) -> str:
+    return "{}\n\nQuestion: {}\n".format(DECOMPOSITION_INSTRUCTIONS, question)
+
+
+# ---- relevance reranking ----
+
+RERANK_INSTRUCTIONS = (
+    "Rank the candidate memories by how useful each is for answering the "
+    "question. Return ONLY JSON: {\"order\":[indexes most useful first]} using "
+    "the given indexes; include only genuinely relevant ones."
+)
+
+
+def build_rerank_prompt(question: str, candidates: str) -> str:
+    return "{}\n\nQuestion: {}\n\nCANDIDATES:\n{}\n".format(
+        RERANK_INSTRUCTIONS, question, candidates)

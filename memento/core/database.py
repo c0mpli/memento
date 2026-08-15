@@ -50,6 +50,26 @@ CREATE TABLE IF NOT EXISTS action_items (
     fingerprint         TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_items_status ON action_items(status);
+CREATE TABLE IF NOT EXISTS derivatives (
+    id          INTEGER PRIMARY KEY,
+    version_id  INTEGER REFERENCES versions(id) ON DELETE CASCADE,
+    thread_id   INTEGER,
+    kind        TEXT NOT NULL DEFAULT 'fact',   -- fact | preference | event
+    content     TEXT NOT NULL,                  -- atomic, self-contained statement
+    subject     TEXT,                           -- normalized topic, for supersession
+    captured_at REAL NOT NULL,
+    supersedes  INTEGER,                         -- id of a derivative this replaces
+    valid       INTEGER NOT NULL DEFAULT 1,      -- 0 once superseded
+    fingerprint TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_deriv_valid   ON derivatives(valid);
+CREATE INDEX IF NOT EXISTS idx_deriv_subject ON derivatives(subject);
+CREATE INDEX IF NOT EXISTS idx_deriv_time    ON derivatives(captured_at);
+CREATE TABLE IF NOT EXISTS derivative_embeddings (
+    derivative_id INTEGER PRIMARY KEY REFERENCES derivatives(id) ON DELETE CASCADE,
+    dim           INTEGER NOT NULL,
+    vec           BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT

@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Type
 
 from ..types import AgentProvider
 from .api_agents import AnthropicAgent, GeminiAgent, OllamaAgent, OpenAIAgent
-from .base import LLMAgent, parse_json_object
+from .base import LLMAgent, parse_json_array, parse_json_object
 from .cli_agents import ClaudeCliAgent, CodexCliAgent
 
 _REGISTRY: Dict[AgentProvider, Type[LLMAgent]] = {
@@ -33,4 +33,10 @@ def create_agent(agent_cfg: Dict[str, Any]) -> Optional[LLMAgent]:
     return cls(agent_cfg) if cls else None
 
 
-__all__ = ["create_agent", "LLMAgent", "parse_json_object"]
+def create_named_agent(provider: str, model: str = "", api_key_env: str = "") -> Optional[LLMAgent]:
+    """Build an agent for an explicit provider (used for a dedicated extractor)."""
+    return create_agent({"provider": provider, "model": model, "api_key_env": api_key_env})
+
+
+__all__ = ["create_agent", "create_named_agent", "LLMAgent",
+           "parse_json_object", "parse_json_array"]

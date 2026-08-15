@@ -60,3 +60,15 @@ def parse_json_object(text: str) -> Dict[str, Any]:
         return json.loads(text[start:end + 1])
     except ValueError:
         return {}
+
+
+def parse_json_array(text: str) -> list:
+    """Extract the outermost JSON array from a model response."""
+    text = (text or "").strip()
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        return json.loads(text[start:end + 1])
+    except ValueError:
+        return []
