@@ -30,7 +30,7 @@ from ..repository import ActionItemRepository
 from ..types import DEFAULT_KEY_ENV, AgentProvider
 from .open_loops import OpenLoopsService
 
-ICON_TITLE = "◔"
+ICON_TITLE = "🧠"
 REFRESH_SECONDS = 60
 
 PROVIDER_LABELS = {
