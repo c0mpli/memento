@@ -20,7 +20,6 @@ You can also just ask your assistant directly (*"what was I working on?"*) — t
 memory is exposed over MCP too. But the point isn't querying; it's that Memento
 *acts* on your behalf, continuously, in the background.
 
-> Memento is an independent, open-source project.
 
 ---
 
