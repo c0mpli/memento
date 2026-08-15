@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from pathlib import Path
 
 try:
     import rumps
@@ -30,7 +31,8 @@ from ..repository import ActionItemRepository
 from ..types import DEFAULT_KEY_ENV, AgentProvider
 from .open_loops import OpenLoopsService
 
-ICON_TITLE = "🧠"
+ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
+ICON_TITLE = None if ICON_PATH.exists() else "M"  # image icon, else a text fallback
 REFRESH_SECONDS = 60
 
 PROVIDER_LABELS = {
@@ -45,7 +47,10 @@ PROVIDER_LABELS = {
 
 class MementoBar(rumps.App):
     def __init__(self):
-        super().__init__("Memento", title=ICON_TITLE, quit_button="Quit Memento")
+        super().__init__(
+            "Memento", title=ICON_TITLE,
+            icon=str(ICON_PATH) if ICON_PATH.exists() else None,
+            template=False, quit_button="Quit Memento")
         self.refresh(None)
 
     # ---- data helpers ----

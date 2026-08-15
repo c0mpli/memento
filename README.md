@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="memento/assets/logo.png" width="112" alt="Memento" />
+</p>
+
 # Memento
 
 **Your Mac remembers. You don't have to.**
@@ -17,7 +21,7 @@ One command:
 brew install memento && memento
 ```
 
-That's it. A small **🧠 icon** appears in your menu bar (top right, next to Wi-Fi).
+That's it. A small **Memento icon** appears in your menu bar (top right, next to Wi-Fi).
 
 ## Everything lives in the icon
 

@@ -33,6 +33,9 @@ Homepage = "https://github.com/c0mpli/memento"
 [tool.setuptools.packages.find]
 include = ["memento*"]
 
+[tool.setuptools.package-data]
+memento = ["assets/*.png", "eval/fixtures/*.json"]
+
 [tool.uv]
 package = true
 
