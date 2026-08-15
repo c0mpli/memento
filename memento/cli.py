@@ -21,6 +21,8 @@ All output is emitted as structured events:  CODE_AREA_STATUS ,{json}
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,10 @@ from pathlib import Path
 
 from . import __version__, config, db
 from .events import emit
+
+AGENT_PROVIDERS = ("none", "claude_cli", "codex_cli", "anthropic", "openai", "ollama")
+EMBED_PROVIDERS = ("none", "ollama", "openai")
+_DEFAULT_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 LABEL = "com.memento.agent"
 PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist")
@@ -177,6 +183,59 @@ def cmd_review(args) -> int:
     return 0
 
 
+# --- config ----------------------------------------------------------------
+
+def cmd_config_show(args) -> int:
+    cfg = config.load_config()
+    emit("MEMENTO_CONFIG_SHOW", agent=cfg["agent"], embeddings=cfg["embeddings"],
+         capture_interval_seconds=cfg["capture_interval_seconds"],
+         watchlist=cfg["watchlist"], config=str(config.CONFIG_PATH))
+    return 0
+
+
+def cmd_config_agent(args) -> int:
+    cfg = config.load_config()
+    a = cfg["agent"]
+    a["provider"] = args.provider
+    if args.model is not None:
+        a["model"] = args.model
+    if args.endpoint is not None:
+        a["endpoint"] = args.endpoint
+    if args.command is not None:
+        a["command"] = shlex.split(args.command)
+    if args.interval is not None:
+        a["interval_seconds"] = args.interval
+    # Key-based providers: default the env var name and warn if it's unset.
+    if args.provider in _DEFAULT_KEY_ENV:
+        a["api_key_env"] = args.key_env or a.get("api_key_env") or _DEFAULT_KEY_ENV[args.provider]
+    elif args.key_env is not None:
+        a["api_key_env"] = args.key_env
+    config.save_config(cfg)
+    emit("MEMENTO_CONFIG_SET", section="agent", provider=a["provider"],
+         model=a["model"], api_key_env=a["api_key_env"])
+    if args.provider in _DEFAULT_KEY_ENV and not os.environ.get(a["api_key_env"], ""):
+        emit("MEMENTO_CONFIG_HINT", note="set your key: export {}=...".format(a["api_key_env"]))
+    return 0
+
+
+def cmd_config_embeddings(args) -> int:
+    cfg = config.load_config()
+    e = cfg["embeddings"]
+    e["provider"] = args.provider
+    if args.model is not None:
+        e["model"] = args.model
+    if args.endpoint is not None:
+        e["endpoint"] = args.endpoint
+    if args.provider == "openai":
+        e["api_key_env"] = args.key_env or e.get("api_key_env") or "OPENAI_API_KEY"
+    elif args.key_env is not None:
+        e["api_key_env"] = args.key_env
+    config.save_config(cfg)
+    emit("MEMENTO_CONFIG_SET", section="embeddings", provider=e["provider"],
+         model=e["model"], api_key_env=e["api_key_env"])
+    return 0
+
+
 # --- reads -----------------------------------------------------------------
 
 def cmd_search(args) -> int:
@@ -286,6 +345,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("threads"); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_threads)
     sp = sub.add_parser("loops"); sp.add_argument("--limit", type=int, default=50); sp.add_argument("--all", action="store_true", help="also show auto-closed loops"); sp.set_defaults(func=cmd_loops)
     sp = sub.add_parser("tail"); sp.add_argument("-n", type=int, default=40); sp.set_defaults(func=cmd_tail)
+
+    # config: switch the agent/embeddings provider (e.g. to API keys) in one line
+    cfgp = sub.add_parser("config", help="show or change providers/keys")
+    csub = cfgp.add_subparsers(dest="section")
+    csub.add_parser("show").set_defaults(func=cmd_config_show)
+    ca = csub.add_parser("agent", help="e.g. memento config agent --provider anthropic")
+    ca.add_argument("--provider", required=True, choices=AGENT_PROVIDERS)
+    ca.add_argument("--model"); ca.add_argument("--key-env", dest="key_env")
+    ca.add_argument("--endpoint"); ca.add_argument("--command",
+                    help='override CLI argv, e.g. "claude -p {prompt}"')
+    ca.add_argument("--interval", type=int); ca.set_defaults(func=cmd_config_agent)
+    ce = csub.add_parser("embeddings", help="e.g. memento config embeddings --provider ollama")
+    ce.add_argument("--provider", required=True, choices=EMBED_PROVIDERS)
+    ce.add_argument("--model"); ce.add_argument("--key-env", dest="key_env")
+    ce.add_argument("--endpoint"); ce.set_defaults(func=cmd_config_embeddings)
+    cfgp.set_defaults(func=cmd_config_show)  # bare `memento config` -> show
     return p
 
 
