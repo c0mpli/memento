@@ -8,9 +8,10 @@ database access (that's the `repository` layer).
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class LLMAgent(ABC):
@@ -18,6 +19,20 @@ class LLMAgent(ABC):
 
     def __init__(self, cfg: Dict[str, Any]):
         self.cfg = cfg
+
+    def api_key(self, *env_vars: str) -> str:
+        """Resolve the key: an in-app-saved `api_key` wins, else the env var
+        named in `api_key_env`, else the provider's default env var(s)."""
+        if self.cfg.get("api_key"):
+            return str(self.cfg["api_key"])
+        candidates: List[str] = []
+        if self.cfg.get("api_key_env"):
+            candidates.append(self.cfg["api_key_env"])
+        candidates.extend(env_vars)
+        for name in candidates:
+            if os.environ.get(name):
+                return os.environ[name]
+        return ""
 
     @abstractmethod
     def complete(self, prompt: str) -> str:

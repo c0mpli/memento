@@ -1,20 +1,18 @@
 """API-key-backed agents: Anthropic, OpenAI, Gemini, Ollama.
 
-Each reads its key from the env var named in config `agent.api_key_env`
-(sensible default per provider) and returns "" if unavailable, so the caller
-degrades gracefully. stdlib-only HTTP.
+The key comes from `api_key` saved in config (entered in the menu bar) or the
+env var in `api_key_env` — see LLMAgent.api_key(). Returns "" when unavailable
+so the caller degrades gracefully. stdlib-only HTTP.
 """
 
 from __future__ import annotations
-
-import os
 
 from .base import LLMAgent, http_post_json
 
 
 class AnthropicAgent(LLMAgent):
     def complete(self, prompt: str) -> str:
-        key = os.environ.get(self.cfg.get("api_key_env") or "ANTHROPIC_API_KEY", "")
+        key = self.api_key("ANTHROPIC_API_KEY")
         if not key:
             return ""
         out = http_post_json(
@@ -28,7 +26,7 @@ class AnthropicAgent(LLMAgent):
 
 class OpenAIAgent(LLMAgent):
     def complete(self, prompt: str) -> str:
-        key = os.environ.get(self.cfg.get("api_key_env") or "OPENAI_API_KEY", "")
+        key = self.api_key("OPENAI_API_KEY")
         if not key:
             return ""
         out = http_post_json(
@@ -42,8 +40,7 @@ class OpenAIAgent(LLMAgent):
 
 class GeminiAgent(LLMAgent):
     def complete(self, prompt: str) -> str:
-        key = (os.environ.get(self.cfg.get("api_key_env") or "GEMINI_API_KEY", "")
-               or os.environ.get("GOOGLE_API_KEY", ""))
+        key = self.api_key("GEMINI_API_KEY", "GOOGLE_API_KEY")
         if not key:
             return ""
         model = self.cfg.get("model") or "gemini-2.0-flash"

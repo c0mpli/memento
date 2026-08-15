@@ -41,6 +41,7 @@ DEFAULTS: Dict[str, Any] = {
         "private browsing", "incognito",
     ],
     "capture_clipboard": False,
+    "paused": False,          # toggled from the menu bar
     "watchlist": [],
     # Semantic search provider (keyword search is the zero-cost default).
     "embeddings": {
