@@ -35,6 +35,41 @@ def embed_text(cfg: Dict[str, Any], text: str) -> Optional[List[float]]:
     return None
 
 
+def embed_texts(cfg: Dict[str, Any], texts: List[str]) -> List[Optional[List[float]]]:
+    """Batch-embed many texts. Uses the provider's batch API where possible
+    (OpenAI accepts an array), else falls back to per-item calls."""
+    ec = cfg.get("embeddings", {})
+    provider = (ec.get("provider") or "none").lower()
+    if not texts or provider == "none":
+        return [None] * len(texts)
+    if provider == "openai":
+        try:
+            return _openai_batch(ec, texts)
+        except Exception:
+            pass
+    return [embed_text(cfg, t) for t in texts]
+
+
+def _openai_batch(ec: Dict[str, Any], texts: List[str],
+                  chunk: int = 256) -> List[Optional[List[float]]]:
+    key = os.environ.get(ec.get("api_key_env") or "OPENAI_API_KEY", "")
+    if not key:
+        return [None] * len(texts)
+    model = ec.get("model") or "text-embedding-3-small"
+    out: List[Optional[List[float]]] = []
+    for i in range(0, len(texts), chunk):
+        batch = [(t or " ").strip() or " " for t in texts[i:i + chunk]]
+        resp = _post("https://api.openai.com/v1/embeddings",
+                     {"model": model, "input": batch},
+                     {"Authorization": "Bearer " + key}, timeout=60.0)
+        data = sorted(resp.get("data") or [], key=lambda d: d["index"])
+        vecs = [[float(x) for x in d["embedding"]] for d in data]
+        if len(vecs) != len(batch):
+            vecs += [None] * (len(batch) - len(vecs))
+        out.extend(vecs)
+    return out
+
+
 def _post(url: str, payload: Dict[str, Any],
           headers: Optional[Dict[str, str]] = None, timeout: float = 30.0) -> Dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")

@@ -36,6 +36,7 @@ def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any],
     embed_on = (cfg.get("embeddings", {}).get("provider") or "none") != EmbedProvider.NONE.value
 
     dates = case.get("haystack_dates") or []
+    pending = []  # (version_id, content) to embed in one batch
     for i, session in enumerate(case.get("haystack_sessions", [])):
         date = dates[i] if i < len(dates) else ""
         title = "session {}{}".format(i, " " + date if date else "")
@@ -46,9 +47,13 @@ def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any],
                 continue
             res = mem.record_capture(role, title, content, ts=float(i * 1000 + j))
             if embed_on and res["stored"] and res["version_id"] is not None:
-                vec = embeddings.embed_text(cfg, content)
-                if vec:
-                    mem.store_embedding(res["version_id"], vec)
+                pending.append((res["version_id"], content))
+
+    if embed_on and pending:
+        vecs = embeddings.embed_texts(cfg, [c for _, c in pending])
+        for (vid, _), vec in zip(pending, vecs):
+            if vec:
+                mem.store_embedding(vid, vec)
 
     question = case["question"]
     rows = _retrieve(mem, cfg, question, top_k)
