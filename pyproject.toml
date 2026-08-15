@@ -17,7 +17,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Everything else (capture, storage, search, embeddings, agent) is stdlib-only.
+# Deep per-app content capture via the macOS Accessibility API (pyobjc).
+ax = [
+    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+]
 dev = ["pytest>=7"]
 
 [project.scripts]
