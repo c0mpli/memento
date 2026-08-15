@@ -22,7 +22,8 @@ CONFIG_PATH = BASE_DIR / "config.json"
 LOG_PATH = BASE_DIR / "memento.log"
 
 # LaunchAgent + MCP tunables.
-LAUNCH_LABEL = "com.memento.agent"
+LAUNCH_LABEL = "com.memento.agent"       # headless capture daemon
+MENUBAR_LABEL = "com.memento.menubar"    # menu-bar app (open loops)
 MCP_DEFAULT_HOST = "127.0.0.1"
 MCP_DEFAULT_PORT = 8787
 

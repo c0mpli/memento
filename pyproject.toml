@@ -13,6 +13,7 @@ authors = [{ name = "Memento contributors" }]
 keywords = ["memory", "mcp", "claude", "ambient", "macos", "local-first"]
 dependencies = [
     "mcp>=1.0",
+    "rumps>=0.4.0; sys_platform == 'darwin'",   # menu-bar app (default UI)
 ]
 
 [project.optional-dependencies]

@@ -39,7 +39,7 @@ from .types import DEFAULT_KEY_ENV, AgentProvider, EmbedProvider, Event, Transpo
 AGENT_PROVIDERS = tuple(p.value for p in AgentProvider)
 EMBED_PROVIDERS = tuple(p.value for p in EmbedProvider)
 
-PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / (config.LAUNCH_LABEL + ".plist")
+LAUNCH_AGENTS = Path.home() / "Library" / "LaunchAgents"
 
 PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -52,7 +52,7 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
         <string>{python}</string>
         <string>-m</string>
         <string>memento</string>
-        <string>capture</string>
+        <string>{sub}</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
@@ -63,6 +63,18 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 """
+
+
+def _plist_path(label: str) -> Path:
+    return LAUNCH_AGENTS / (label + ".plist")
+
+
+def _rumps_available() -> bool:
+    try:
+        import rumps  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def _ts(ts) -> str:
@@ -102,6 +114,18 @@ def cmd_capture(args) -> int:
     return run()
 
 
+def cmd_menubar(args) -> int:
+    try:
+        import rumps  # noqa: F401
+    except Exception as e:  # noqa: BLE001
+        emit(Event.MENUBAR_MISSING.value, error=str(e),
+             hint="pip install 'memento-memory[menubar]'")
+        return 1
+    from .services import menubar
+    emit(Event.MENUBAR_START.value)
+    return menubar.run()
+
+
 def cmd_mcp(args) -> int:
     from .mcp import server
     if getattr(args, "http", False):
@@ -113,31 +137,45 @@ def cmd_mcp(args) -> int:
     return 0
 
 
-def _write_plist() -> None:
-    PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _agents() -> list:
+    """LaunchAgents to run by default: headless capture + the menu-bar app."""
+    agents = [(config.LAUNCH_LABEL, "capture")]
+    if _rumps_available():
+        agents.append((config.MENUBAR_LABEL, "menubar"))
+    return agents
+
+
+def _load_agent(label: str, sub: str) -> bool:
+    path = _plist_path(label)
+    path.parent.mkdir(parents=True, exist_ok=True)
     config.ensure_base()
-    PLIST_PATH.write_text(PLIST_TEMPLATE.format(
-        label=config.LAUNCH_LABEL, python=sys.executable,
+    path.write_text(PLIST_TEMPLATE.format(
+        label=label, sub=sub, python=sys.executable,
         log=str(config.LOG_PATH), cwd=str(config.BASE_DIR)))
+    subprocess.run(["launchctl", "unload", str(path)], capture_output=True)
+    r = subprocess.run(["launchctl", "load", "-w", str(path)], capture_output=True, text=True)
+    if r.returncode != 0:
+        emit(Event.DAEMON_LOAD_ERR.value, label=label, error=r.stderr.strip())
+        return False
+    emit(Event.DAEMON_LOADED.value, label=label, kind=sub, log=str(config.LOG_PATH))
+    return True
 
 
 def cmd_start(args) -> int:
-    _write_plist()
-    subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
-    r = subprocess.run(["launchctl", "load", "-w", str(PLIST_PATH)], capture_output=True, text=True)
-    if r.returncode != 0:
-        emit(Event.DAEMON_LOAD_ERR.value, error=r.stderr.strip())
-        return 1
-    emit(Event.DAEMON_LOADED.value, label=config.LAUNCH_LABEL, log=str(config.LOG_PATH))
-    return 0
+    ok = True
+    for label, sub in _agents():
+        ok = _load_agent(label, sub) and ok
+    return 0 if ok else 1
 
 
 def cmd_stop(args) -> int:
-    if not PLIST_PATH.exists():
-        emit(Event.DAEMON_ABSENT.value, label=config.LAUNCH_LABEL)
-        return 0
-    subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
-    emit(Event.DAEMON_UNLOADED.value, label=config.LAUNCH_LABEL)
+    for label in (config.LAUNCH_LABEL, config.MENUBAR_LABEL):
+        path = _plist_path(label)
+        if path.exists():
+            subprocess.run(["launchctl", "unload", str(path)], capture_output=True)
+            emit(Event.DAEMON_UNLOADED.value, label=label)
+        else:
+            emit(Event.DAEMON_ABSENT.value, label=label)
     return 0
 
 
@@ -331,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-V", "--version", action="version", version="memento " + __version__)
     sub = p.add_subparsers(dest="cmd")
 
-    for name in ("init", "capture", "start", "stop", "restart", "status", "doctor"):
+    for name in ("init", "capture", "menubar", "start", "stop", "restart", "status", "doctor"):
         sub.add_parser(name).set_defaults(func=globals()["cmd_" + name])
 
     mp = sub.add_parser("mcp")

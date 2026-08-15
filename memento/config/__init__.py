@@ -7,6 +7,7 @@ from .settings import (
     DB_PATH,
     DEFAULTS,
     LAUNCH_LABEL,
+    MENUBAR_LABEL,
     LOG_PATH,
     MCP_DEFAULT_HOST,
     MCP_DEFAULT_PORT,
@@ -18,6 +19,6 @@ from .settings import (
 __all__ = [
     "prompts",
     "BASE_DIR", "DB_PATH", "CONFIG_PATH", "LOG_PATH", "DEFAULTS",
-    "LAUNCH_LABEL", "MCP_DEFAULT_HOST", "MCP_DEFAULT_PORT",
+    "LAUNCH_LABEL", "MENUBAR_LABEL", "MCP_DEFAULT_HOST", "MCP_DEFAULT_PORT",
     "ensure_base", "load_config", "save_config",
 ]

@@ -20,9 +20,7 @@ You can also just ask your assistant directly (*"what was I working on?"*) — t
 memory is exposed over MCP too. But the point isn't querying; it's that Memento
 *acts* on your behalf, continuously, in the background.
 
-> Memento is an independent, clean-room, open-source project inspired by the
-> *idea* of ambient memory apps. It is not affiliated with, and contains no code
-> from, Minimi / SHRAM Insights.
+> Memento is an independent, open-source project.
 
 ---
 
@@ -114,6 +112,19 @@ Or add to any MCP client's config:
 Then just ask: *"what was I working on before lunch?"*, *"find the thread where I
 discussed the migration"*, *"what are my open loops?"*
 
+## Menu-bar app
+
+By default, `memento start` also launches a **menu-bar icon** (top-right of your
+screen, left of Wi-Fi). Click it to see your open loops; click a loop to mark it
+done; "Review now" runs the agent on demand.
+
+```bash
+memento menubar     # run just the menu-bar app in the foreground
+```
+
+It's installed as its own LaunchAgent so it reappears at login. Requires `rumps`
+(a default dependency on macOS).
+
 ## Commands
 
 ```
@@ -147,14 +158,15 @@ By default `memento init` wires the agent to whichever CLI you already pay for
 (`claude` or `codex`) — **no API key needed**. Switch any time with one command:
 
 ```bash
-# use your Claude Code / Codex subscription (default)
+# use your Claude Code / Codex subscription (default, no key)
 memento config agent --provider claude_cli
 memento config agent --provider codex_cli
 
 # OR bring your own key instead
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY= / GEMINI_API_KEY=
 memento config agent --provider anthropic --model claude-sonnet-4-5
 memento config agent --provider openai    --model gpt-4o-mini
+memento config agent --provider gemini    --model gemini-2.0-flash
 
 # OR run it fully local
 memento config agent --provider ollama --model llama3.1
@@ -163,9 +175,22 @@ memento config agent --provider ollama --model llama3.1
 Optional semantic search (keyword search is the zero-cost default):
 
 ```bash
-memento config embeddings --provider ollama --model nomic-embed-text   # local, free
+memento config embeddings --provider ollama --model nomic-embed-text     # local, free
 memento config embeddings --provider openai --model text-embedding-3-small
+memento config embeddings --provider gemini --model text-embedding-004
 ```
+
+### Use it from ChatGPT / claude.ai / Gemini (custom connector)
+
+Those clients take an MCP **link**, not a local command. Serve Memento over HTTP
+and point the connector at it:
+
+```bash
+memento mcp --http --port 8787        # → http://127.0.0.1:8787/mcp
+```
+
+For a remote client, expose that port with a tunnel (e.g. `cloudflared tunnel`
+/ `ngrok http 8787`) and paste the resulting HTTPS URL as a custom connector.
 
 `memento config show` prints the current setup.
 
