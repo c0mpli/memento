@@ -7,11 +7,25 @@ from __future__ import annotations
 
 import array
 import math
+import re
 import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
 from ..core.database import fingerprint, normalize
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+# Question/filler words that shouldn't drive retrieval.
+_STOPWORDS = frozenset(
+    "the a an and or of to in on at for with my me i you your it is are was were "
+    "what when where who how why did do does had have has will would should could "
+    "about that this these those there here from by as be been being can may might "
+    "roughly given anything something".split()
+)
+
+
+def _tokens(text: str) -> List[str]:
+    return [t for t in _TOKEN.findall(normalize(text)) if len(t) > 2 and t not in _STOPWORDS]
 
 
 class MemoryRepository:
@@ -75,16 +89,33 @@ class MemoryRepository:
     # ---- reads ----
 
     def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Keyword search over content + title, newest first."""
-        like = "%" + normalize(query).replace(" ", "%") + "%"
+        """Token-based keyword search: match any query term, then rank by how
+        many distinct terms hit (title weighted), tie-broken by recency."""
+        tokens = _tokens(query)
+        if not tokens:
+            return self.recent(limit=limit)
+        clause = " OR ".join(["lower(v.content) LIKE ? OR lower(t.title) LIKE ?"] * len(tokens))
+        params: List[Any] = []
+        for tok in tokens:
+            like = "%" + tok + "%"
+            params.extend([like, like])
         rows = self.conn.execute(
             "SELECT v.id, v.content, v.captured_at, t.app, t.title "
             "FROM versions v JOIN threads t ON t.id = v.thread_id "
-            "WHERE lower(v.content) LIKE ? OR lower(t.title) LIKE ? "
-            "ORDER BY v.captured_at DESC LIMIT ?",
-            (like, like, limit),
+            "WHERE " + clause + " ORDER BY v.captured_at DESC LIMIT 300",
+            params,
         ).fetchall()
-        return [dict(r) for r in rows]
+
+        scored = []
+        for r in rows:
+            body = (r["content"] or "").lower()
+            title = (r["title"] or "").lower()
+            score = sum(1 for tok in tokens if tok in body)
+            score += sum(0.5 for tok in tokens if tok in title)
+            if score > 0:
+                scored.append((score, r["captured_at"], r))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return [dict(r) for _, _, r in scored[:limit]]
 
     def recent(self, limit: int = 20, minutes: Optional[int] = None) -> List[Dict[str, Any]]:
         params: List[Any] = []
