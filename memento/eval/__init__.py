@@ -19,7 +19,9 @@ from .harness import evaluate_case
 
 
 def run_eval(cfg: Dict[str, Any], dataset_path: Optional[str] = None,
-             limit: Optional[int] = None, top_k: int = 8) -> Dict[str, Any]:
+             limit: Optional[int] = None, top_k: int = 8, use_facts: bool = True,
+             decompose: bool = True, time_aware: bool = True,
+             rerank: bool = True) -> Dict[str, Any]:
     agent = create_agent(cfg.get("agent", {}))
     if agent is None:
         emit(Event.REVIEW_SKIP.value, reason="agent disabled")
@@ -32,7 +34,8 @@ def run_eval(cfg: Dict[str, Any], dataset_path: Optional[str] = None,
     per: Dict[str, list] = {}
     for c in cases:
         try:
-            r = evaluate_case(c, cfg, agent, top_k=top_k)
+            r = evaluate_case(c, cfg, agent, top_k=top_k, use_facts=use_facts,
+                              decompose=decompose, time_aware=time_aware, rerank=rerank)
         except Exception as e:  # noqa: BLE001
             r = {"question_id": c.get("question_id"),
                  "question_type": c.get("question_type", "unknown"),

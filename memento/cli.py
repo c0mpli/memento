@@ -229,7 +229,9 @@ def cmd_eval(args) -> int:
     if (cfg.get("agent", {}).get("provider") or "none") == AgentProvider.NONE.value:
         emit(Event.REVIEW_SKIP.value, reason="agent disabled", config=str(config.CONFIG_PATH))
         return 1
-    run_eval(cfg, dataset_path=args.dataset, limit=args.limit, top_k=args.top_k)
+    run_eval(cfg, dataset_path=args.dataset, limit=args.limit, top_k=args.top_k,
+             use_facts=not args.raw, decompose=not args.no_decompose,
+             time_aware=not args.no_time, rerank=not args.no_rerank)
     return 0
 
 
@@ -395,7 +397,14 @@ def build_parser() -> argparse.ArgumentParser:
     mp.set_defaults(func=cmd_mcp)
 
     rp = sub.add_parser("review"); rp.add_argument("--minutes", type=int, default=120); rp.set_defaults(func=cmd_review)
-    ep = sub.add_parser("eval"); ep.add_argument("--dataset", default=None); ep.add_argument("--limit", type=int, default=None); ep.add_argument("--top-k", dest="top_k", type=int, default=8); ep.set_defaults(func=cmd_eval)
+    ep = sub.add_parser("eval")
+    ep.add_argument("--dataset", default=None); ep.add_argument("--limit", type=int, default=None)
+    ep.add_argument("--top-k", dest="top_k", type=int, default=8)
+    ep.add_argument("--raw", action="store_true", help="baseline: raw turns only, no facts")
+    ep.add_argument("--no-decompose", action="store_true")
+    ep.add_argument("--no-time", action="store_true")
+    ep.add_argument("--no-rerank", action="store_true")
+    ep.set_defaults(func=cmd_eval)
     sp = sub.add_parser("search"); sp.add_argument("query"); sp.add_argument("--limit", type=int, default=10); sp.set_defaults(func=cmd_search)
     sp = sub.add_parser("recent"); sp.add_argument("--minutes", type=int, default=None); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_recent)
     sp = sub.add_parser("threads"); sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_threads)
