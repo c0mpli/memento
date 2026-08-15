@@ -27,3 +27,9 @@ Homepage = "https://github.com/yourname/memento"
 
 [tool.setuptools]
 packages = ["memento"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["pytest>=7"]
