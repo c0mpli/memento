@@ -1,14 +1,14 @@
-"""RetrievalService — the smart-retrieval pipeline.
+"""RetrievalService — the retrieval pipeline.
 
-    question
-      -> time-window parse (restrict to a date range when the question is time-scoped)
-      -> decompose into sub-questions (multi-hop)
-      -> per sub-question: semantic/keyword search over FACTS (+ raw-turn recall backup)
-      -> merge, rerank by relevance
-      -> structured, timestamped context
-
-Facts are the primary unit (high precision); raw turns are a recall backup. All
-steps degrade gracefully, so retrieval always returns something.
+Design:
+  - the retrievable VALUE is the raw round (verbatim), so no detail is lost;
+    facts only augment the embedded KEY at index time (done during ingestion).
+  - multi-hop questions are decomposed into sub-questions.
+  - per sub-question we fuse semantic + keyword rankings with Reciprocal Rank
+    Fusion, so both signals contribute.
+  - time-awareness is a SOFT boost (in-range rounds float up) rather than a hard
+    filter, so a mis-parsed window can't drop the answer.
+  - candidates are reranked, then sorted oldest->newest for the reader.
 """
 
 from __future__ import annotations
@@ -19,9 +19,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..agents import create_agent, parse_json_object
 from ..config import prompts
-from ..repository import DerivativeRepository, MemoryRepository
+from ..repository import MemoryRepository
 from ..types import EmbedProvider
 from . import embeddings
+
+RRF_K = 60
 
 
 def _iso_to_epoch(s: Optional[str]) -> Optional[float]:
@@ -40,11 +42,14 @@ def _fmt_ts(ts) -> str:
         return "?"
 
 
+def _rid(r: Dict[str, Any]) -> Any:
+    return r.get("id", r.get("version_id"))
+
+
 class RetrievalService:
     def __init__(self, conn: sqlite3.Connection, cfg: Dict[str, Any], agent=None):
         self.cfg = cfg
         self.mem = MemoryRepository(conn)
-        self.deriv = DerivativeRepository(conn)
         self.agent = agent or create_agent(cfg.get("agent", {}))
 
     def _emb_on(self) -> bool:
@@ -75,13 +80,41 @@ class RetrievalService:
             subs = []
         return subs[:4] or [question]
 
-    def _fact_hits(self, query: str, k: int, tf, tt) -> List[Dict[str, Any]]:
+    def _semantic(self, query: str, n: int) -> List[Dict[str, Any]]:
         qv = self._qvec(query)
         if qv:
-            rows = self.deriv.semantic_search(qv, limit=k, time_from=tf, time_to=tt)
+            rows = self.mem.semantic_search(qv, limit=n)
             if rows:
                 return rows
-        return self.deriv.keyword_search(query, limit=k, time_from=tf, time_to=tt)
+        return self.mem.search(query, limit=n)
+
+    def _fuse(self, question: str, subs: List[str], n: int) -> List[Dict[str, Any]]:
+        """Reciprocal Rank Fusion of semantic + keyword lists across sub-questions."""
+        scores: Dict[Any, float] = {}
+        rows: Dict[Any, Dict[str, Any]] = {}
+        for sub in subs:
+            for rank, r in enumerate(self._semantic(sub, n)):
+                k = _rid(r)
+                scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
+                rows.setdefault(k, r)
+            for rank, r in enumerate(self.mem.search(sub, limit=n)):
+                k = _rid(r)
+                scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
+                rows.setdefault(k, r)
+        order = sorted(scores, key=lambda k: scores[k], reverse=True)
+        return [rows[k] for k in order]
+
+    def _time_boost(self, cands: List[Dict[str, Any]], tf, tt) -> List[Dict[str, Any]]:
+        if tf is None and tt is None:
+            return cands
+        def in_range(r):
+            ts = r.get("captured_at")
+            if ts is None:
+                return False
+            return (tf is None or ts >= tf) and (tt is None or ts <= tt)
+        inside = [r for r in cands if in_range(r)]
+        outside = [r for r in cands if not in_range(r)]
+        return inside + outside  # soft: in-range first, nothing dropped
 
     def rerank(self, question: str, cands: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
         if not self.agent or len(cands) <= top_k:
@@ -108,18 +141,12 @@ class RetrievalService:
                  rerank: bool = True) -> List[Dict[str, Any]]:
         tf, tt = self.time_window(question, as_of) if time_aware else (None, None)
         subs = self.decompose(question) if decompose else [question]
-
-        pool: Dict[Any, Dict[str, Any]] = {}
-        for sub in subs:
-            for r in self._fact_hits(sub, top_k, tf, tt):
-                pool[("f", r["id"])] = r
-        # recall backup: raw turns (keyword) for the whole question
-        for r in self.mem.search(question, limit=top_k):
-            key = ("v", r.get("id"))
-            pool.setdefault(key, r)
-
-        cands = list(pool.values())
-        return self.rerank(question, cands, top_k) if rerank else cands[:top_k]
+        cands = self._fuse(question, subs, n=top_k * 3)
+        cands = self._time_boost(cands, tf, tt)
+        cands = cands[:max(top_k * 2, top_k)]
+        cands = self.rerank(question, cands, top_k) if rerank else cands[:top_k]
+        cands.sort(key=lambda r: r.get("captured_at") or 0.0)  # reader: oldest -> newest
+        return cands
 
     def context(self, rows: List[Dict[str, Any]]) -> str:
         return "\n".join("[{}] {}".format(_fmt_ts(r.get("captured_at")),

@@ -43,14 +43,18 @@ def build_open_loops_prompt(open_items: List[Dict], activity: List[Dict]) -> str
 # ---- eval harness (LongMemEval-style QA + LLM judge) ----
 
 QA_INSTRUCTIONS = (
-    "Answer the question using ONLY the retrieved memory below. Be concise and "
-    "specific. If the memory does not contain the answer, reply exactly "
-    "\"I don't know.\""
+    "Answer the question using ONLY the retrieved memories below. They are "
+    "timestamped and sorted oldest to newest.\n"
+    "First, in one or two short lines, note which memories are relevant and what "
+    "each says (a scratchpad). Then give the final answer on its own line, "
+    "prefixed with 'ANSWER:'.\n"
+    "If a fact changed over time, use the most recent value. If the memories do "
+    "not contain the answer, the final line must be exactly 'ANSWER: I don't know.'"
 )
 
 
 def build_qa_prompt(context: str, question: str) -> str:
-    return "{}\n\nMEMORY:\n{}\n\nQUESTION: {}\nANSWER:".format(
+    return "{}\n\nMEMORIES:\n{}\n\nQUESTION: {}\n".format(
         QA_INSTRUCTIONS, context, question)
 
 

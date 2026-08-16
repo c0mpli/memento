@@ -58,6 +58,18 @@ class DerivationService:
                 added.append((did, content))
         return added
 
+    def session_facts(self, turns: List[Dict[str, Any]]) -> List[str]:
+        """Return atomic fact strings for a session (for key augmentation)."""
+        return [str(f.get("content") or "").strip()
+                for f in self._extract(self._session_text(turns))
+                if isinstance(f, dict) and str(f.get("content") or "").strip()]
+
+    def facts_for_sessions(self, sessions: List[List[Dict[str, Any]]],
+                           workers: int = 8) -> List[List[str]]:
+        """Extract facts for many sessions concurrently; order preserved."""
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            return list(ex.map(self.session_facts, sessions))
+
     def ingest_session(self, turns: List[Dict[str, Any]], thread_id: Optional[int] = None,
                        captured_at: Optional[float] = None,
                        version_id: Optional[int] = None) -> List[Tuple[int, str]]:
