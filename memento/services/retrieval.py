@@ -88,12 +88,20 @@ class RetrievalService:
                 return rows
         return self.mem.search(query, limit=n)
 
-    def _fuse(self, question: str, subs: List[str], n: int) -> List[Dict[str, Any]]:
-        """Reciprocal Rank Fusion of semantic + keyword lists across sub-questions."""
+    def _time_hint(self, tf, tt) -> str:
+        if tf is None and tt is None:
+            return ""
+        return " (relevant dates {} to {})".format(_fmt_ts(tf) if tf else "?",
+                                                    _fmt_ts(tt) if tt else "?")
+
+    def _fuse(self, question: str, subs: List[str], n: int, time_hint: str = "") -> List[Dict[str, Any]]:
+        """Reciprocal Rank Fusion of semantic + keyword lists across sub-questions.
+        The semantic query is expanded with the resolved date range; keyword uses
+        the original words."""
         scores: Dict[Any, float] = {}
         rows: Dict[Any, Dict[str, Any]] = {}
         for sub in subs:
-            for rank, r in enumerate(self._semantic(sub, n)):
+            for rank, r in enumerate(self._semantic(sub + time_hint, n)):
                 k = _rid(r)
                 scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
                 rows.setdefault(k, r)
@@ -103,6 +111,17 @@ class RetrievalService:
                 rows.setdefault(k, r)
         order = sorted(scores, key=lambda k: scores[k], reverse=True)
         return [rows[k] for k in order]
+
+    def _cap_per_session(self, rows: List[Dict[str, Any]], per: int = 2) -> List[Dict[str, Any]]:
+        """Force cross-session coverage: at most `per` rounds per session."""
+        seen: Dict[Any, int] = {}
+        out = []
+        for r in rows:
+            key = r.get("title") or r.get("app") or _rid(r)
+            if seen.get(key, 0) < per:
+                out.append(r)
+                seen[key] = seen.get(key, 0) + 1
+        return out
 
     def _time_boost(self, cands: List[Dict[str, Any]], tf, tt) -> List[Dict[str, Any]]:
         if tf is None and tt is None:
@@ -141,7 +160,7 @@ class RetrievalService:
                  rerank: bool = True) -> List[Dict[str, Any]]:
         tf, tt = self.time_window(question, as_of) if time_aware else (None, None)
         subs = self.decompose(question) if decompose else [question]
-        cands = self._fuse(question, subs, n=top_k * 3)
+        cands = self._fuse(question, subs, n=top_k * 3, time_hint=self._time_hint(tf, tt))
         cands = self._time_boost(cands, tf, tt)
         cands = cands[:max(top_k * 2, top_k)]
         cands = self.rerank(question, cands, top_k) if rerank else cands[:top_k]
