@@ -15,9 +15,10 @@ from typing import Any, Dict, List, Optional
 from ..agents import create_named_agent, parse_json_object
 from ..config import prompts
 from ..core import database
-from ..repository import MemoryRepository
+from ..repository import DerivativeRepository, MemoryRepository
 from ..services import embeddings
 from ..services.derivation import DerivationService
+from ..services.graph import EntityGraph
 from ..services.retrieval import RetrievalService
 from ..types import EmbedProvider
 
@@ -110,17 +111,29 @@ def _select_profile(all_prefs: List[str], question: str, cfg: Dict[str, Any],
     return [p for _, p in scored[:k]]
 
 
-def _reader_context(profile: List[str], rows: List[Dict[str, Any]],
-                    as_of_ts: Optional[float]) -> str:
-    prof = "KNOWN USER PREFERENCES:\n" + (
-        "\n".join("- " + p for p in profile) if profile else "(none recorded)")
+def _reader_context(profile: List[str], current_facts: List[str],
+                    rows: List[Dict[str, Any]], as_of_ts: Optional[float]) -> str:
+    parts = []
+    if current_facts:
+        parts.append("KNOWN CURRENT FACTS (latest value wins):\n"
+                     + "\n".join("- " + f for f in current_facts))
+    parts.append("KNOWN USER PREFERENCES:\n" + (
+        "\n".join("- " + p for p in profile) if profile else "(none recorded)"))
     items = []
     for r in rows:
         ts = r.get("captured_at")
         days_ago = int((as_of_ts - ts) // 86400) if (as_of_ts and ts is not None) else None
         items.append({"date": _fmt_date(ts), "days_ago": days_ago,
                       "text": (r.get("content") or "").strip()[:600]})
-    return prof + "\n\nMEMORIES:\n" + json.dumps(items, ensure_ascii=False)
+    parts.append("MEMORIES:\n" + json.dumps(items, ensure_ascii=False))
+    return "\n\n".join(parts)
+
+
+def _current_facts(drepo, cfg: Dict[str, Any], question: str, k: int = 12) -> List[str]:
+    emb_on = (cfg.get("embeddings", {}).get("provider") or "none") != EmbedProvider.NONE.value
+    qv = embeddings.embed_text(cfg, question) if emb_on else None
+    rows = drepo.semantic_search(qv, limit=k) if qv else drepo.keyword_search(question, limit=k)
+    return [str(r.get("content") or "").strip() for r in rows if r.get("content")]
 
 
 def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any], agent, top_k: int = 10,
@@ -134,27 +147,46 @@ def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any], agent, top_k: int =
     sessions = case.get("haystack_sessions", [])
     dates = case.get("haystack_dates") or []
 
-    # facts augment the KEY only (K = V + fact); values stay verbatim.
-    # preferences form a durable profile that is always injected at read time.
+    # facts augment the KEY (K = V + fact) and populate a bi-temporal fact store;
+    # preferences form a durable profile; entities build a cross-session graph.
     session_facts: List[List[str]] = [[] for _ in sessions]
+    session_entities: List[List[str]] = [[] for _ in sessions]
     profile: List[str] = []
+    drepo = DerivativeRepository(conn)
+    graph = None
     if use_facts:
         items = DerivationService(conn, cfg).items_for_sessions(sessions, workers=8)
         session_facts = [[str(d.get("content") or "").strip() for d in sess if d.get("content")]
                          for sess in items]
+        session_entities = [list({e for d in sess for e in (d.get("entities") or [])
+                                  if isinstance(e, str) and e.strip()}) for sess in items]
         prefs_by_session = [[{"statement": d.get("content", "")} for d in sess
                              if d.get("kind") == "preference"] for sess in items]
         profile = _select_profile(_compile_profile(prefs_by_session), case["question"], cfg, k=20)
+        # store facts to the bi-temporal store in chronological order (supersession)
+        order = sorted(range(len(sessions)),
+                       key=lambda i: _parse_ts(dates[i] if i < len(dates) else "", i))
+        for i in order:
+            ts = _parse_ts(dates[i] if i < len(dates) else "", i)
+            for d in items[i]:
+                if d.get("kind") in ("fact", "event") and d.get("content"):
+                    drepo.add(d["content"], kind=d.get("kind", "fact"),
+                              subject=str(d.get("subject") or ""), captured_at=ts,
+                              updates=bool(d.get("updates")))
+        graph = EntityGraph()
 
     pending = []  # (version_id, key_text)
     for i, session in enumerate(sessions):
         ts = _parse_ts(dates[i] if i < len(dates) else "", i)
         facts = " ".join(session_facts[i]) if i < len(session_facts) else ""
+        ents = session_entities[i] if i < len(session_entities) else []
         for k, round_text in enumerate(_rounds(session)):
             res = mem.record_capture("chat", "session {}".format(i), round_text, ts=ts + k * 0.001)
-            if emb_on and res["stored"] and res["version_id"] is not None:
-                key_text = round_text + ("\nfacts: " + facts if facts else "")
-                pending.append((res["version_id"], key_text))
+            vid = res["version_id"]
+            if graph is not None and vid is not None:
+                graph.add_round(vid, ents)
+            if emb_on and res["stored"] and vid is not None:
+                pending.append((vid, round_text + ("\nfacts: " + facts if facts else "")))
 
     if emb_on and pending:
         vecs = embeddings.embed_texts(cfg, [kt for _, kt in pending])
@@ -162,13 +194,27 @@ def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any], agent, top_k: int =
             if vec:
                 mem.store_embedding(vid, vec)
 
+    if graph is not None:
+        graph.finalize(total_rounds=max(len(pending), 1))
+    # embed current facts so they are retrievable for the current-facts block
+    if use_facts and emb_on:
+        cur = drepo.current_items()
+        if cur:
+            fvecs = embeddings.embed_texts(cfg, [c["content"] for c in cur])
+            for c, v in zip(cur, fvecs):
+                if v:
+                    drepo.store_embedding(c["id"], v)
+
+    current_facts = _current_facts(drepo, cfg, case["question"]) if use_facts else []
+
     rc = cfg.get("retrieval") or {}
     ret_agent = (create_named_agent(rc["provider"], rc.get("model", ""), rc.get("api_key_env", ""))
                  if rc.get("provider") else agent)
-    rsvc = RetrievalService(conn, cfg, agent=ret_agent)
+    rsvc = RetrievalService(conn, cfg, agent=ret_agent, graph=graph)
     rows = rsvc.retrieve(case["question"], as_of=case.get("question_date"), top_k=top_k,
                          decompose=decompose, time_aware=time_aware, rerank=rerank)
-    context = _reader_context(profile, rows, _question_ts(case.get("question_date", "")))
+    context = _reader_context(profile, current_facts, rows,
+                              _question_ts(case.get("question_date", "")))
 
     question = case["question"]
     predicted = _extract_answer(agent.complete(prompts.build_qa_prompt(context, question)))

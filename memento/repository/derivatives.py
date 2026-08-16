@@ -116,5 +116,11 @@ class DerivativeRepository:
                         "score": round(score, 4)})
         return out
 
+    def current_items(self, limit: int = 2000) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, content, subject, captured_at FROM derivatives "
+            "WHERE valid=1 ORDER BY captured_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     def count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) n FROM derivatives WHERE valid=1").fetchone()["n"]

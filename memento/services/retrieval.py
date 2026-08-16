@@ -47,10 +47,11 @@ def _rid(r: Dict[str, Any]) -> Any:
 
 
 class RetrievalService:
-    def __init__(self, conn: sqlite3.Connection, cfg: Dict[str, Any], agent=None):
+    def __init__(self, conn: sqlite3.Connection, cfg: Dict[str, Any], agent=None, graph=None):
         self.cfg = cfg
         self.mem = MemoryRepository(conn)
         self.agent = agent or create_agent(cfg.get("agent", {}))
+        self.graph = graph  # optional EntityGraph for the multi-session channel
 
     def _emb_on(self) -> bool:
         return (self.cfg.get("embeddings", {}).get("provider") or "none") != EmbedProvider.NONE.value
@@ -88,29 +89,57 @@ class RetrievalService:
                 return rows
         return self.mem.search(query, limit=n)
 
+    def _hyde(self, question: str) -> Optional[List[float]]:
+        """A hypothetical answer, embedded — surfaces obliquely-worded memories."""
+        if not self.agent or not self._emb_on():
+            return None
+        try:
+            doc = self.agent.complete(prompts.build_hyde_prompt(question))
+        except Exception:
+            return None
+        return self._qvec(doc) if doc and doc.strip() else None
+
+    def _graph_rows(self, question: str, n: int) -> List[Dict[str, Any]]:
+        if self.graph is None:
+            return []
+        rows = []
+        for rid in self.graph.rank_rounds(question, top_n=n):
+            r = self.mem.get(rid)
+            if r:
+                rows.append(r)
+        return rows
+
     def _time_hint(self, tf, tt) -> str:
         if tf is None and tt is None:
             return ""
         return " (relevant dates {} to {})".format(_fmt_ts(tf) if tf else "?",
                                                     _fmt_ts(tt) if tt else "?")
 
-    def _fuse(self, question: str, subs: List[str], n: int, time_hint: str = "") -> List[Dict[str, Any]]:
-        """Reciprocal Rank Fusion of semantic + keyword lists across sub-questions.
-        The semantic query is expanded with the resolved date range; keyword uses
-        the original words."""
+    def _rrf(self, channels: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Reciprocal Rank Fusion over any number of ranked candidate lists."""
         scores: Dict[Any, float] = {}
         rows: Dict[Any, Dict[str, Any]] = {}
+        for lst in channels:
+            for rank, r in enumerate(lst):
+                k = _rid(r)
+                scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
+                rows.setdefault(k, r)
+        return [rows[k] for k in sorted(scores, key=lambda k: scores[k], reverse=True)]
+
+    def _channels(self, question: str, subs: List[str], n: int, time_hint: str,
+                  hyde: bool) -> List[List[Dict[str, Any]]]:
+        channels: List[List[Dict[str, Any]]] = []
         for sub in subs:
-            for rank, r in enumerate(self._semantic(sub + time_hint, n)):
-                k = _rid(r)
-                scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
-                rows.setdefault(k, r)
-            for rank, r in enumerate(self.mem.search(sub, limit=n)):
-                k = _rid(r)
-                scores[k] = scores.get(k, 0.0) + 1.0 / (RRF_K + rank)
-                rows.setdefault(k, r)
-        order = sorted(scores, key=lambda k: scores[k], reverse=True)
-        return [rows[k] for k in order]
+            channels.append(self._semantic(sub + time_hint, n))  # semantic (date-expanded)
+            channels.append(self.mem.search(sub, limit=n))        # keyword (original words)
+        if hyde:
+            hv = self._hyde(question)
+            if hv:
+                channels.append(self.mem.semantic_search(hv, limit=n))
+        graph_rows = self._graph_rows(question, n)                # cross-session graph
+        if graph_rows:
+            channels.append(graph_rows)
+        return channels
 
     def _cap_per_session(self, rows: List[Dict[str, Any]], per: int = 2) -> List[Dict[str, Any]]:
         """Force cross-session coverage: at most `per` rounds per session."""
@@ -157,10 +186,11 @@ class RetrievalService:
 
     def retrieve(self, question: str, as_of: Optional[str] = None, top_k: int = 10,
                  decompose: bool = True, time_aware: bool = True,
-                 rerank: bool = True) -> List[Dict[str, Any]]:
+                 rerank: bool = True, hyde: bool = True) -> List[Dict[str, Any]]:
         tf, tt = self.time_window(question, as_of) if time_aware else (None, None)
         subs = self.decompose(question) if decompose else [question]
-        cands = self._fuse(question, subs, n=top_k * 3, time_hint=self._time_hint(tf, tt))
+        channels = self._channels(question, subs, top_k * 3, self._time_hint(tf, tt), hyde)
+        cands = self._rrf(channels)
         cands = self._time_boost(cands, tf, tt)
         cands = cands[:max(top_k * 2, top_k)]
         cands = self.rerank(question, cands, top_k) if rerank else cands[:top_k]

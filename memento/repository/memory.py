@@ -150,6 +150,14 @@ class MemoryRepository:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get(self, version_id: int) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT v.id, v.content, v.captured_at, t.app, t.title "
+            "FROM versions v JOIN threads t ON t.id = v.thread_id WHERE v.id = ?",
+            (version_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
     def stats(self) -> Dict[str, Any]:
         c = self.conn
         return {

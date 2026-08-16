@@ -107,7 +107,8 @@ FACT_EXTRACTION_INSTRUCTIONS = (
     "Ignore small talk and assistant chatter.\n\n"
     "Return ONLY a JSON array; [] if nothing. Each item:\n"
     '{"kind":"fact|preference|event","content":"a single standalone statement",'
-    '"subject":"2-4 word topic key","updates":true|false}\n'
+    '"subject":"2-4 word topic key","entities":["canonical names of people, '
+    'places, orgs, products mentioned"],"updates":true|false}\n'
     "Set updates=true when it changes or replaces an earlier state "
     "(e.g. a move, a switch, a new value)."
 )
@@ -157,3 +158,16 @@ RERANK_INSTRUCTIONS = (
 def build_rerank_prompt(question: str, candidates: str) -> str:
     return "{}\n\nQuestion: {}\n\nCANDIDATES:\n{}\n".format(
         RERANK_INSTRUCTIONS, question, candidates)
+
+
+# ---- HyDE: a hypothetical answer, embedded to surface an obliquely-worded memory ----
+
+HYDE_INSTRUCTIONS = (
+    "Write a short, first-person statement (2-3 sentences) that would plausibly "
+    "answer the question from the user's own remembered history, including likely "
+    "specifics. This is a retrieval probe, not a real answer."
+)
+
+
+def build_hyde_prompt(question: str) -> str:
+    return "{}\n\nQuestion: {}\n".format(HYDE_INSTRUCTIONS, question)
