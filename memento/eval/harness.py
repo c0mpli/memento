@@ -1,20 +1,20 @@
-"""Per-case evaluation with the full retrieval pipeline.
+"""Per-case evaluation with the K = V + fact retrieval pipeline.
 
-Each case's haystack sessions are ingested as raw turns (recall backup) and
-distilled into atomic facts (primary retrieval unit). We then retrieve with
-decomposition + time-awareness + rerank, answer with the agent, and grade with
-the agent as judge. Flags allow ablating each stage.
+The retrievable value is the raw round (verbatim). Facts extracted from each
+session only augment the embedded key, so retrieval recall improves without
+losing the detail the reader needs. Reading is Chain-of-Note (scratchpad then
+'ANSWER:'), and the agent judges the answer. Flags ablate each stage.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from ..agents import create_named_agent, parse_json_object
 from ..config import prompts
 from ..core import database
-from ..repository import DerivativeRepository, MemoryRepository
+from ..repository import MemoryRepository
 from ..services import embeddings
 from ..services.derivation import DerivationService
 from ..services.retrieval import RetrievalService
@@ -31,6 +31,28 @@ def _parse_ts(date_str: str, index: int) -> float:
     return float(index * 86400)
 
 
+def _rounds(session: List[Dict[str, Any]]) -> List[str]:
+    """Pair consecutive user/assistant turns into rounds (the value unit)."""
+    rounds, i = [], 0
+    while i < len(session):
+        t = session[i]
+        nxt = session[i + 1] if i + 1 < len(session) else None
+        if nxt and t.get("role") == "user" and nxt.get("role") == "assistant":
+            rounds.append("user: {}\nassistant: {}".format(
+                t.get("content", ""), nxt.get("content", "")))
+            i += 2
+        else:
+            rounds.append("{}: {}".format(t.get("role", "user"), t.get("content", "")))
+            i += 1
+    return rounds
+
+
+def _extract_answer(raw: str) -> str:
+    text = (raw or "").strip()
+    marker = text.lower().rfind("answer:")
+    return text[marker + len("answer:"):].strip() if marker != -1 else text
+
+
 def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any], agent, top_k: int = 10,
                   use_facts: bool = True, decompose: bool = True,
                   time_aware: bool = True, rerank: bool = True) -> Dict[str, Any]:
@@ -39,42 +61,40 @@ def evaluate_case(case: Dict[str, Any], cfg: Dict[str, Any], agent, top_k: int =
     mem = MemoryRepository(conn)
     emb_on = (cfg.get("embeddings", {}).get("provider") or "none") != EmbedProvider.NONE.value
 
+    sessions = case.get("haystack_sessions", [])
     dates = case.get("haystack_dates") or []
-    sessions = []
-    for i, session in enumerate(case.get("haystack_sessions", [])):
-        ts = _parse_ts(dates[i] if i < len(dates) else "", i)
-        title = "session {}".format(i)
-        for j, turn in enumerate(session):
-            content = turn.get("content", "")
-            if content:
-                mem.record_capture(turn.get("role", "user"), title, content, ts=ts + j * 0.001)
-        sessions.append({"turns": session, "captured_at": ts})
 
-    if use_facts:
-        added = DerivationService(conn, cfg).ingest_sessions(sessions, workers=8)
-        if emb_on and added:
-            vecs = embeddings.embed_texts(cfg, [c for _, c in added])
-            drepo = DerivativeRepository(conn)
-            for (did, _), vec in zip(added, vecs):
-                if vec:
-                    drepo.store_embedding(did, vec)
+    # facts augment the KEY only (K = V + fact); values stay verbatim.
+    session_facts: List[List[str]] = [[] for _ in sessions]
+    if use_facts and emb_on:
+        session_facts = DerivationService(conn, cfg).facts_for_sessions(sessions, workers=8)
+
+    pending = []  # (version_id, key_text)
+    for i, session in enumerate(sessions):
+        ts = _parse_ts(dates[i] if i < len(dates) else "", i)
+        facts = " ".join(session_facts[i]) if i < len(session_facts) else ""
+        for k, round_text in enumerate(_rounds(session)):
+            res = mem.record_capture("chat", "session {}".format(i), round_text, ts=ts + k * 0.001)
+            if emb_on and res["stored"] and res["version_id"] is not None:
+                key_text = round_text + ("\nfacts: " + facts if facts else "")
+                pending.append((res["version_id"], key_text))
+
+    if emb_on and pending:
+        vecs = embeddings.embed_texts(cfg, [kt for _, kt in pending])
+        for (vid, _), vec in zip(pending, vecs):
+            if vec:
+                mem.store_embedding(vid, vec)
 
     rc = cfg.get("retrieval") or {}
     ret_agent = (create_named_agent(rc["provider"], rc.get("model", ""), rc.get("api_key_env", ""))
                  if rc.get("provider") else agent)
     rsvc = RetrievalService(conn, cfg, agent=ret_agent)
-    if use_facts:
-        rows = rsvc.retrieve(case["question"], as_of=case.get("question_date"), top_k=top_k,
-                             decompose=decompose, time_aware=time_aware, rerank=rerank)
-        context = rsvc.context(rows)
-    else:
-        # baseline: raw turns only
-        rows = (rsvc.mem.semantic_search(rsvc._qvec(case["question"]), limit=top_k)
-                if rsvc._qvec(case["question"]) else rsvc.mem.search(case["question"], limit=top_k))
-        context = rsvc.context(rows)
+    rows = rsvc.retrieve(case["question"], as_of=case.get("question_date"), top_k=top_k,
+                         decompose=decompose, time_aware=time_aware, rerank=rerank)
+    context = rsvc.context(rows)
 
     question = case["question"]
-    predicted = (agent.complete(prompts.build_qa_prompt(context, question)) or "").strip()
+    predicted = _extract_answer(agent.complete(prompts.build_qa_prompt(context, question)))
     verdict = parse_json_object(
         agent.complete(prompts.build_judge_prompt(question, case.get("answer", ""), predicted)))
     conn.close()
