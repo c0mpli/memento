@@ -43,19 +43,43 @@ def build_open_loops_prompt(open_items: List[Dict], activity: List[Dict]) -> str
 # ---- eval harness (LongMemEval-style QA + LLM judge) ----
 
 QA_INSTRUCTIONS = (
-    "Answer the question using ONLY the retrieved memories below. They are "
-    "timestamped and sorted oldest to newest.\n"
-    "First, in one or two short lines, note which memories are relevant and what "
-    "each says (a scratchpad). Then give the final answer on its own line, "
-    "prefixed with 'ANSWER:'.\n"
-    "If a fact changed over time, use the most recent value. If the memories do "
-    "not contain the answer, the final line must be exactly 'ANSWER: I don't know.'"
+    "Answer using ONLY the information below: a KNOWN USER PREFERENCES block (a "
+    "durable profile of the user's tastes, constraints, and habits) and MEMORIES "
+    "(a JSON array of timestamped items sorted oldest to newest; each has date, "
+    "days_ago, and text).\n"
+    "Think briefly on a scratchpad, then give the final line as 'ANSWER: <answer>'.\n"
+    "Scratchpad rules:\n"
+    "1. Note the items relevant to the question, with their dates.\n"
+    "2. If items conflict, use the one with the MOST RECENT date.\n"
+    "3. If the question is about timing/duration, compute it from the dates or "
+    "days_ago and show the arithmetic.\n"
+    "4. If the question is about the user's tastes/choices, APPLY the KNOWN USER "
+    "PREFERENCES.\n"
+    "If the answer is not present, the final line must be exactly "
+    "'ANSWER: I don't know.'"
 )
 
 
 def build_qa_prompt(context: str, question: str) -> str:
-    return "{}\n\nMEMORIES:\n{}\n\nQUESTION: {}\n".format(
-        QA_INSTRUCTIONS, context, question)
+    return "{}\n\n{}\n\nQUESTION: {}\n".format(QA_INSTRUCTIONS, context, question)
+
+
+# ---- preference / profile extraction (the durable, always-injected profile) ----
+
+PREFERENCE_EXTRACTION_INSTRUCTIONS = (
+    "From the conversation below, list the USER's preferences: tastes, likes, "
+    "dislikes, constraints, habits, values, and standing instructions. Include "
+    "ones that are IMPLIED but not stated outright (e.g. 'I get anxious in crowds' "
+    "implies a preference for quiet places). Resolve references so each statement "
+    "stands alone.\n"
+    "Return ONLY a JSON array; [] if none. Each item: "
+    '{"category":"2-4 word topic","statement":"a standalone preference",'
+    '"polarity":"like|dislike|constraint|habit|value"}'
+)
+
+
+def build_preference_prompt(conversation: str) -> str:
+    return "{}\n\nCONVERSATION:\n{}\n".format(PREFERENCE_EXTRACTION_INSTRUCTIONS, conversation)
 
 
 JUDGE_INSTRUCTIONS = (
@@ -74,14 +98,17 @@ def build_judge_prompt(question: str, gold: str, predicted: str) -> str:
 # ---- fact extraction (turn raw activity into atomic, indexable facts) ----
 
 FACT_EXTRACTION_INSTRUCTIONS = (
-    "Extract atomic, self-contained facts about the USER from the conversation "
-    "below. Each fact must stand alone without the surrounding context (resolve "
-    "pronouns and references). Capture stated preferences, decisions, states, "
-    "attributes, plans, and events. Ignore small talk and assistant chatter.\n\n"
+    "Extract atomic, self-contained statements about the USER from the "
+    "conversation below. Each must stand alone without the surrounding context "
+    "(resolve pronouns and references). Capture decisions, states, attributes, "
+    "plans, and events as kind='fact' or 'event'. Capture the user's tastes, "
+    "likes, dislikes, constraints, habits, values, and standing instructions "
+    "(INCLUDING ones implied but not stated outright) as kind='preference'. "
+    "Ignore small talk and assistant chatter.\n\n"
     "Return ONLY a JSON array; [] if nothing. Each item:\n"
     '{"kind":"fact|preference|event","content":"a single standalone statement",'
     '"subject":"2-4 word topic key","updates":true|false}\n'
-    "Set updates=true when the fact changes or replaces an earlier state "
+    "Set updates=true when it changes or replaces an earlier state "
     "(e.g. a move, a switch, a new value)."
 )
 
