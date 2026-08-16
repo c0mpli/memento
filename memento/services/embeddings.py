@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
+
+_RETRY_CODES = {429, 500, 502, 503, 504}
 
 
 def embed_text(cfg: Dict[str, Any], text: str) -> Optional[List[float]]:
@@ -70,15 +74,28 @@ def _openai_batch(ec: Dict[str, Any], texts: List[str],
     return out
 
 
-def _post(url: str, payload: Dict[str, Any],
-          headers: Optional[Dict[str, str]] = None, timeout: float = 30.0) -> Dict[str, Any]:
+def _post(url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None,
+          timeout: float = 30.0, retries: int = 5) -> Dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in _RETRY_CODES and attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            raise
+    return {}
 
 
 def _ollama(ec: Dict[str, Any], text: str) -> Optional[List[float]]:
